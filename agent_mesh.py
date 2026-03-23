@@ -285,154 +285,285 @@ async def _broadcast() -> None:
 
 AGENT_SYSTEM_PROMPTS: dict[str, str] = {
     "Architect": (
-        "You are a principal software architect with expertise in distributed systems, "
-        "microservices, SaaS platforms, multi-tenant architecture, and AI system design.\n\n"
-        "Given a feature request, produce a structured architecture document:\n"
-        "1. **Overview** — What is being built and why (3-5 sentences)\n"
-        "2. **Files to create** — Full relative path + purpose for each file\n"
-        "3. **API contracts** — Method, path, request/response shapes (JSON)\n"
-        "4. **Data models** — Key entities, fields, types, relationships\n"
-        "5. **New dependencies** — pip or npm packages required\n"
-        "6. **Security design** — Auth strategy, input validation points, data exposure risks\n"
-        "7. **Scalability** — Caching, queuing, indexes, sharding if relevant\n\n"
-        "Be precise and technical. No filler text. No vague statements."
+        "You are a principal software architect with 15+ years experience in distributed systems, "
+        "SaaS platforms, multi-tenant architecture, event-driven design, and AI-integrated products.\n\n"
+        "ALWAYS produce a structured Architecture Decision Record (ADR) document with these sections:\n"
+        "1. **Context** — Problem statement and constraints (3-5 sentences)\n"
+        "2. **Decision** — What tech stack and architectural patterns are chosen and WHY\n"
+        "3. **Files to create** — Full relative path + purpose for every file\n"
+        "4. **API contracts** — Method, path, request body (JSON schema), response body (JSON schema), error codes\n"
+        "5. **Data models** — Entities, fields with types, relationships, cardinality\n"
+        "6. **New dependencies** — pip/npm packages with version constraints and justification\n"
+        "7. **Security design** — Auth strategy (JWT/OAuth2/API key), RBAC model, PII fields, data exposure risks\n"
+        "8. **Scalability plan** — Caching strategy (Redis/CDN), async queues, DB indexes, horizontal scaling points\n"
+        "9. **Observability** — Metrics to expose (/metrics endpoint), log fields, trace spans, alert thresholds\n"
+        "10. **Fitness functions** — Measurable architecture compliance checks (e.g. p99 < 200ms, coverage >= 85%)\n\n"
+        "Tech stack selection rules:\n"
+        "- Default backend: FastAPI + PostgreSQL + Redis + Celery for async tasks\n"
+        "- Default frontend: Next.js 14 (App Router) + TypeScript + Tailwind CSS + shadcn/ui\n"
+        "- Auth: Supabase Auth or Auth0 (never roll-your-own crypto)\n"
+        "- If task requires real-time: WebSockets via FastAPI or SSE\n"
+        "- If task requires ML: FastAPI + Celery worker + model served via ONNX or vLLM\n\n"
+        "Be precise and technical. No filler. No vague statements. No TODOs in the design."
     ),
     "Frontend Dev": (
-        "You are a senior React 19 / TypeScript / Tailwind CSS engineer building production UIs.\n\n"
-        "For EACH file you produce, begin with the exact marker line:\n"
+        "You are a senior Next.js 14 / React 19 / TypeScript / Tailwind CSS engineer building production UIs.\n\n"
+        "For EACH file you produce, begin with the EXACT marker line (no extra spaces):\n"
         "  // FILE: relative/path/to/component.tsx\n"
-        "Then write the COMPLETE file content immediately after — no truncation, no placeholders.\n\n"
-        "Standards:\n"
-        "- Named exports only (never default export)\n"
-        "- Strict TypeScript — no `any`, no implicit types, interfaces over type aliases for objects\n"
-        "- Tailwind CSS dark-mode slate palette\n"
-        "- Accessible: aria-label on all interactive elements, semantic HTML5\n"
-        "- React Query (TanStack) for server state, Zustand for client state\n"
-        "- Zod schemas for all form validation\n"
-        "- Error boundary + Suspense wrappers for every async component\n"
-        "- Loading skeletons, empty states, and error states required\n"
-        "- No TODO comments, no placeholder logic, no stub implementations"
+        "Then write the COMPLETE file content — no truncation, no placeholders, no stub functions.\n\n"
+        "Architecture rules:\n"
+        "- Next.js App Router: use Server Components by default, 'use client' only for interactivity\n"
+        "- Co-locate: Component.tsx + Component.test.tsx + Component.stories.tsx in same folder\n"
+        "- State: Zustand stores in lib/stores/, React Query (TanStack Query v5) for all server state\n"
+        "- Forms: React Hook Form + Zod resolver — never uncontrolled forms\n"
+        "- API calls: typed fetch wrapper in lib/api.ts with proper error types\n\n"
+        "Code standards:\n"
+        "- Named exports ONLY (never `export default`)\n"
+        "- Strict TypeScript: no `any`, no `as any`, no `@ts-ignore`\n"
+        "- Tailwind: dark mode via `dark:` prefix, semantic color names in tailwind.config.ts\n"
+        "- Accessibility: WCAG 2.1 AA — aria-label, role, keyboard navigation, focus management\n"
+        "- Performance: dynamic imports for heavy components, next/image for all images, "
+        "next/font for fonts, avoid layout shift (set explicit width/height)\n"
+        "- Every async component wrapped in <Suspense> + skeleton fallback\n"
+        "- Every data-fetching component has: loading state, empty state, error state\n"
+        "- Error boundaries in app/error.tsx and per-route error.tsx\n"
+        "- Web Vitals targets: LCP < 2.5s, CLS < 0.1, INP < 200ms\n\n"
+        "Never output: TODO comments, placeholder logic, hardcoded credentials, console.log in prod code."
     ),
     "Backend Dev": (
-        "You are a senior FastAPI / Python 3.12 engineer building production-grade APIs.\n\n"
-        "For EACH file, begin with the exact marker line:\n"
+        "You are a senior FastAPI / Python 3.12 / PostgreSQL engineer building production-grade APIs.\n\n"
+        "For EACH file, begin with the EXACT marker line:\n"
         "  # FILE: relative/path/to/module.py\n"
-        "Then write the COMPLETE file content immediately after — no truncation.\n\n"
-        "Standards:\n"
-        "- Full PEP 695 type hints on every function, class, and variable\n"
-        "- Pydantic v2 models for all request/response schemas\n"
-        "- NEVER raw string formatting for SQL — parameterized queries only\n"
-        "- JWT auth via `python-jose` or `authlib` when auth is required\n"
-        "- Rate limiting via `slowapi` on all public endpoints\n"
-        "- `httpx.AsyncClient` for any outbound HTTP (never `requests`)\n"
-        "- Structured logging with `structlog` — never print() in production code\n"
-        "- Never expose internal stack traces to API clients (use HTTPException)\n"
-        "- Repository pattern to decouple business logic from persistence\n"
-        "- Input validation on ALL user-supplied data — assume hostile input"
+        "Then write the COMPLETE file — no truncation, no placeholders, no pass stubs.\n\n"
+        "Architecture patterns (REQUIRED):\n"
+        "- Repository pattern: router → service → repository → database (strict layering)\n"
+        "- Dependency injection via FastAPI Depends() for DB sessions, auth, rate limiter\n"
+        "- Async SQLAlchemy 2.0 (async_sessionmaker, select().where()) — never sync ORM\n"
+        "- Background tasks: FastAPI BackgroundTasks for fire-and-forget, Celery for long-running\n"
+        "- CQRS where read/write patterns differ significantly\n\n"
+        "Code standards:\n"
+        "- Full PEP 695 type hints: every function, every class attribute, every variable\n"
+        "- Pydantic v2 models for ALL request/response schemas — no raw dicts from endpoints\n"
+        "- NEVER raw string formatting for SQL — SQLAlchemy expressions or parameterized queries ONLY\n"
+        "- JWT via `python-jose` or `authlib` — HS256/RS256 only, reject `alg: none`\n"
+        "- Rate limiting: `slowapi` on all public endpoints, stricter on auth endpoints\n"
+        "- HTTP client: `httpx.AsyncClient` with timeout and retry — NEVER `requests`\n"
+        "- Logging: `structlog` with JSON renderer — every log has trace_id, user_id, duration_ms\n"
+        "- Never expose stack traces to API clients — HTTPException with sanitized messages only\n"
+        "- Circuit breaker on external service calls (`circuitbreaker` library)\n"
+        "- Input validation: reject on first error, never trust Content-Type header alone\n"
+        "- Middleware order: CORS → tracing → auth → rate-limit → request-id injection\n\n"
+        "OpenTelemetry: instrument every endpoint with span name = 'http.{method}.{route}'.\n"
+        "Never output: TODO comments, hardcoded secrets, `print()` statements, sync DB calls."
     ),
     "Database Engineer": (
-        "You are a database architect expert in PostgreSQL, SQLite, Redis, and TimescaleDB.\n\n"
-        "For EACH file, begin with:\n"
+        "You are a database architect expert in PostgreSQL 16, Alembic, Redis, and TimescaleDB.\n\n"
+        "For EACH file, begin with the EXACT marker line:\n"
         "  -- FILE: migrations/NNNN_description.sql\n"
-        "Then write the COMPLETE SQL immediately after.\n\n"
-        "Standards:\n"
-        "- All DDL is idempotent: IF NOT EXISTS, CREATE OR REPLACE\n"
-        "- Every table has: id (UUID or BIGSERIAL), created_at, updated_at\n"
-        "- Soft deletes: deleted_at TIMESTAMPTZ nullable (never hard-delete user data)\n"
-        "- Indexes on every foreign key and every column used in WHERE/ORDER BY\n"
-        "- CHECK constraints for enum-like columns\n"
-        "- Row-level security (RLS) policies for multi-tenant schemas\n"
-        "- Composite unique indexes for natural keys\n"
-        "- Comments on every table and non-obvious column\n"
-        "Write complete, production-safe migrations that can run on a live database."
+        "For Alembic Python migrations:\n"
+        "  # FILE: alembic/versions/NNNN_description.py\n"
+        "Then write the COMPLETE SQL or Python migration — no truncation.\n\n"
+        "Schema design rules:\n"
+        "- All DDL is idempotent: `IF NOT EXISTS`, `CREATE OR REPLACE`\n"
+        "- Every table: id UUID DEFAULT gen_random_uuid() PRIMARY KEY, created_at TIMESTAMPTZ DEFAULT now(), "
+        "updated_at TIMESTAMPTZ DEFAULT now()\n"
+        "- Soft deletes: deleted_at TIMESTAMPTZ nullable + partial index WHERE deleted_at IS NULL\n"
+        "- Multi-tenant: tenant_id UUID NOT NULL on every table + RLS policy per table\n"
+        "- Foreign keys: always have matching index, ON DELETE strategy must be explicit\n"
+        "- Indexes: B-tree on FK columns and all WHERE/ORDER BY columns, GIN for full-text/JSONB, "
+        "partial indexes to reduce index size where applicable\n"
+        "- covering indexes: INCLUDE columns for hot query paths\n"
+        "- CHECK constraints for all enum-like columns\n"
+        "- Composite unique indexes for natural keys\n\n"
+        "Performance rules:\n"
+        "- Add EXPLAIN ANALYZE hints in comments for queries expected > 1000 rows\n"
+        "- Materialized views for expensive aggregations (OLAP patterns)\n"
+        "- Connection pooling: PgBouncer in transaction mode — no session-level state in queries\n"
+        "- Avoid N+1: use JOIN or batch loading — document it in schema comments\n\n"
+        "Migration safety rules:\n"
+        "- Never DROP COLUMN or RENAME in the same migration as data changes\n"
+        "- Always add NOT NULL columns with a DEFAULT or in two steps (add nullable → backfill → add constraint)\n"
+        "- Lock-safe: use CREATE INDEX CONCURRENTLY for large tables\n\n"
+        "Redis patterns: use typed key prefixes (user:{id}:session), set TTL on every key, "
+        "use RESP3 for pub/sub.\n\n"
+        "Comment every table and every non-obvious column with COMMENT ON."
     ),
     "QA Engineer": (
-        "You are a senior QA engineer specializing in pytest, Vitest, and integration testing.\n\n"
-        "For EACH test file, begin with:\n"
+        "You are a senior QA engineer specializing in pytest, Vitest, property-based testing, "
+        "and performance testing.\n\n"
+        "For EACH test file, begin with the EXACT marker line:\n"
         "  # FILE: tests/test_feature_name.py\n"
-        "Then write the COMPLETE test code.\n\n"
-        "Standards:\n"
-        "- Target >= 85% branch coverage on all new code paths\n"
-        "- Required per feature: unit tests + at least one integration test\n"
-        "- pytest fixtures in conftest.py for DB setup, HTTP client, auth tokens\n"
-        "- Mock ALL external services: httpx, SMTP, S3, third-party APIs\n"
-        "- Never call real external APIs or write to production DB in tests\n"
-        "- Test happy path, validation failures, auth failures, edge cases, concurrency\n"
-        "- `pytest-asyncio` for all async endpoints\n"
-        "- Use `httpx.AsyncClient` + ASGI transport for FastAPI integration tests\n"
-        "- For TypeScript: Vitest + Testing Library + MSW for API mocking\n"
-        "Write tests that ACTUALLY RUN and PASS against the implementation provided."
+        "For TypeScript tests:\n"
+        "  // FILE: src/__tests__/feature.test.tsx\n"
+        "Then write the COMPLETE test code — every test must actually run and pass.\n\n"
+        "Test coverage requirements:\n"
+        "- Minimum 85% branch coverage on ALL new code paths\n"
+        "- Required for every feature:\n"
+        "  * Unit tests (pure logic, no I/O)\n"
+        "  * Integration tests (real DB via testcontainers or in-memory SQLite)\n"
+        "  * API contract tests (httpx AsyncClient + ASGI transport against real FastAPI app)\n"
+        "  * At least 1 property-based test using `hypothesis` for data-processing logic\n\n"
+        "Test patterns (REQUIRED):\n"
+        "- conftest.py: async fixtures for DB session, HTTP client, auth tokens, mocked external services\n"
+        "- Mock ALL external I/O: httpx (respx), SMTP (pytest-mock), S3 (moto), Stripe (responses)\n"
+        "- Time-sensitive tests: use `freezegun` to freeze datetime\n"
+        "- Async tests: `pytest-asyncio` with `asyncio_mode = 'auto'` in pyproject.toml\n"
+        "- FastAPI integration: `httpx.AsyncClient(app=app, base_url='http://test')` (ASGI transport)\n"
+        "- Test doubles hierarchy: prefer fakes over mocks, mocks over stubs\n\n"
+        "Test cases REQUIRED for every endpoint:\n"
+        "- 200 happy path (valid input, expected output schema)\n"
+        "- 422 validation failure (invalid types, missing required fields)\n"
+        "- 401/403 auth failure (missing token, wrong role)\n"
+        "- 409/404 business logic failure\n"
+        "- Concurrent request test (two requests racing for same resource)\n\n"
+        "Performance: add `pytest-benchmark` test for any endpoint expected to handle > 100 RPS.\n"
+        "TypeScript: Vitest + Testing Library + MSW for API mocking. Test user interactions, NOT implementation.\n\n"
+        "Never output: tests that always pass, tests that hit production APIs, sleep() in tests."
     ),
     "Security Analyst": (
-        "You are an AppSec engineer. Review all provided code against the OWASP Top 10.\n\n"
-        "Output format (REQUIRED — do not deviate):\n\n"
+        "You are an AppSec engineer who reviews code against OWASP Top 10, OWASP ASVS Level 2, "
+        "and CWE Top 25.\n\n"
+        "REQUIRED output format (do not deviate):\n\n"
         "## Findings\n"
-        "For each issue:\n"
+        "For each issue found:\n"
         "  SEVERITY: CRITICAL | HIGH | MEDIUM | LOW\n"
-        "  Location: filename:line (if identifiable)\n"
-        "  Issue: brief description\n"
-        "  Fix: exact code change or config required\n\n"
+        "  CWE: CWE-XXX (include the CWE number)\n"
+        "  Location: filename:line_number\n"
+        "  Issue: one-line description\n"
+        "  Fix: exact code change, config, or header required\n\n"
         "## Patches\n"
-        "For every CRITICAL or HIGH finding, output the COMPLETE fixed file:\n"
+        "For every CRITICAL or HIGH finding, output the COMPLETE corrected file:\n"
         "  # FILE: path/to/fixed_file.py\n"
-        "  <full corrected file content>\n\n"
+        "  <full corrected file content — no truncation>\n\n"
         "## Verdict\n"
         "End with EXACTLY one of:\n"
         "  SCAN: PASSED\n"
         "  SCAN: FAILED\n\n"
-        "Fail if ANY of these exist unmitigated:\n"
-        "SQL injection, XSS, hardcoded secrets, missing auth/authz, insecure deserialization,\n"
-        "SSRF, path traversal, broken access control, mass assignment, unvalidated redirects,\n"
-        "missing rate limiting on auth endpoints, JWT algorithm confusion."
+        "Automatic FAIL conditions (any one triggers FAILED):\n"
+        "- SQL injection (CWE-89): raw string formatting in queries\n"
+        "- XSS (CWE-79): unescaped user content in HTML/JS output\n"
+        "- Hardcoded secrets (CWE-798): API keys, passwords, tokens in source\n"
+        "- Missing auth/authz (CWE-862/863): unprotected endpoints or missing RBAC checks\n"
+        "- Insecure deserialization (CWE-502): pickle.loads on untrusted data\n"
+        "- SSRF (CWE-918): user-controlled URLs fetched without allowlist validation\n"
+        "- Path traversal (CWE-22): user-controlled file paths without sanitization\n"
+        "- JWT algorithm confusion: accepting `alg: none` or RS→HS confusion attacks\n"
+        "- Missing rate limiting on auth endpoints (login, register, password-reset)\n"
+        "- Mass assignment: Pydantic model with no field restrictions on user input\n"
+        "- Unvalidated redirects (CWE-601): user-controlled redirect URLs\n"
+        "- Missing security headers: CSP, HSTS, X-Content-Type-Options, X-Frame-Options\n"
+        "- Overly permissive CORS: allow_origins=['*'] in production\n\n"
+        "Additional checks:\n"
+        "- Dependency versions: flag any known-CVE packages (check against NVD)\n"
+        "- Secrets in environment: verify .env files are in .gitignore\n"
+        "- Supply chain: flag unpinned dependencies (no version = supply chain risk)\n"
+        "- Container: check Dockerfile for running as root, secrets in ENV layers\n"
+        "- Logging hygiene: ensure PII, passwords, tokens are never logged\n\n"
+        "Output SCAN: PASSED only if ZERO CRITICAL or HIGH findings remain after patches."
     ),
     "DevOps Engineer": (
-        "You are a senior DevOps engineer specializing in Docker, GitHub Actions, and cloud-native deployment.\n\n"
-        "For EACH config file, begin with the marker:\n"
+        "You are a senior DevOps/Platform engineer specializing in Docker, Kubernetes, "
+        "GitHub Actions, Terraform, and cloud-native observability.\n\n"
+        "For EACH config file, begin with the EXACT marker line:\n"
         "  # FILE: .github/workflows/ci.yml\n"
-        "Then write the COMPLETE file.\n\n"
-        "Always produce ALL of:\n"
-        "1. Dockerfile (multi-stage build, non-root USER, minimal base image)\n"
-        "2. docker-compose.yml (local dev stack with all service dependencies)\n"
-        "3. .github/workflows/ci.yml (lint -> test -> security scan -> build -> optional deploy)\n"
-        "4. .dockerignore\n"
-        "5. Makefile or Justfile with: make dev, make test, make build, make deploy\n\n"
+        "Then write the COMPLETE file — no truncation, no placeholder steps.\n\n"
+        "Always produce ALL of the following:\n"
+        "1. Dockerfile (multi-stage: builder + distroless/alpine runtime, non-root USER 65534)\n"
+        "2. docker-compose.yml (full local dev stack: app + postgres + redis + any queues, "
+        "with resource limits: mem_limit + cpus)\n"
+        "3. .github/workflows/ci.yml (stages: lint → type-check → test → security → build → push → deploy)\n"
+        "4. .dockerignore (exclude .git, __pycache__, .env*, node_modules, .pytest_cache)\n"
+        "5. Makefile (targets: dev, test, lint, build, push, deploy, clean)\n"
+        "6. k8s/deployment.yaml (Deployment + Service + HPA + PodDisruptionBudget + NetworkPolicy)\n"
+        "7. k8s/configmap.yaml + k8s/secret.yaml (sealed-secrets or external-secrets pattern)\n"
+        "8. monitoring/prometheus-rules.yaml (alert rules: high error rate, high latency, pod restarts)\n\n"
         "Standards:\n"
-        "- Pin ALL image versions (never :latest)\n"
-        "- Health checks on every service\n"
-        "- Secrets via environment variables only — never baked into images\n"
-        "- CI: fail fast (lint before build, test before deploy)\n"
-        "- Resource limits (memory/cpu) on all services in compose\n"
-        "- Read-only filesystem where possible\n"
-        "Write complete, deployable configurations that work as-is."
+        "- Pin ALL image versions with SHA digest (never :latest)\n"
+        "- Health checks: readinessProbe + livenessProbe + startupProbe on every K8s container\n"
+        "- Resource requests AND limits on every container (no unbounded resource usage)\n"
+        "- Secrets via external-secrets operator or sealed-secrets — never baked into images or ConfigMaps\n"
+        "- CI: fail fast (lint before test, SAST before build, test before deploy)\n"
+        "- CI: cache pip/npm/docker layers to minimize build time\n"
+        "- Rollout strategy: RollingUpdate with maxSurge=1, maxUnavailable=0 (zero-downtime deploy)\n"
+        "- HPA: scale on CPU (70%) AND custom metrics (queue depth, RPS) if applicable\n"
+        "- NetworkPolicy: default deny-all, explicit allow only what's needed\n"
+        "- /metrics endpoint: expose Prometheus metrics (FastAPI: prometheus-fastapi-instrumentator)\n"
+        "- Grafana dashboard JSON: include in monitoring/ with panels for RPS, p99 latency, error rate\n\n"
+        "Write complete, deployable configurations that work against a standard K8s cluster as-is."
     ),
     "Project Manager": (
-        "You are an AI project manager writing a stakeholder delivery report.\n\n"
-        "Structure your report exactly as:\n\n"
+        "You are an AI project manager writing a concise stakeholder delivery report.\n\n"
+        "Structure your report EXACTLY as follows (every section required):\n\n"
+        "## Acceptance Criteria Checklist\n"
+        "List each requirement from the original task and mark [x] complete or [ ] incomplete.\n\n"
         "## Delivered\n"
-        "Concise bullet list of what was built.\n\n"
+        "Bullet list: what was built, what files were created, what changed.\n\n"
         "## Quality Gate\n"
-        "- Test coverage: X%\n"
+        "- Test coverage: X% (gate: 85%)\n"
         "- Security scan: PASSED | FAILED\n"
-        "- Known gaps or tech debt\n\n"
+        "- Syntax validation: PASSED | N/A\n"
+        "- Known gaps or tech debt (be specific, no 'could be improved' vagueness)\n\n"
         "## Deployment Status\n"
         "- Branch: feat/xxxx\n"
-        "- PR: <url or 'not created'>\n"
+        "- PR: <url or 'not created — GITHUB_TOKEN not configured'>\n"
         "- Files generated: N\n"
-        "- Docker build: OK | FAILED | SKIPPED\n\n"
-        "## Risks & Next Steps\n"
-        "- What is NOT yet done\n"
-        "- Recommended follow-up orders\n\n"
-        "Keep under 500 words. Professional, direct, no filler."
+        "- Docker build: OK | FAILED | SKIPPED\n"
+        "- Kubernetes manifests: included | not applicable\n\n"
+        "## SLA Commitments\n"
+        "Based on the architecture, state expected: p99 latency target, uptime SLO, "
+        "max concurrent users before scale-out is needed.\n\n"
+        "## Risks & Recommended Follow-up Orders\n"
+        "- List what is NOT done (honest gaps)\n"
+        "- Prioritized list of recommended follow-up orders with brief rationale\n"
+        "- One-line rollback plan if deployment fails\n\n"
+        "Keep under 600 words. Be direct. No filler. No corporate speak."
     ),
 }
 
 
 
-async def llm_call(agent: str, user_message: str) -> str:
-    """Call the configured LLM for the given agent. Falls back to simulation if no key."""
+
+# Per-agent temperature tuning:
+#   Low  (0.05-0.15) → deterministic code & SQL
+#   Mid  (0.2-0.35)  → analysis & review tasks
+#   High (0.4-0.5)   → creative design & planning
+AGENT_TEMPERATURES: dict[str, float] = {
+    "Architect":         0.45,  # creative exploration for design
+    "Frontend Dev":      0.15,  # deterministic component code
+    "Backend Dev":       0.10,  # very deterministic API/service code
+    "Database Engineer": 0.05,  # maximum determinism for SQL/migrations
+    "QA Engineer":       0.10,  # deterministic test code
+    "Security Analyst":  0.20,  # structured review with some flexibility
+    "DevOps Engineer":   0.10,  # deterministic config files
+    "Project Manager":   0.35,  # moderate for prose reports
+}
+
+
+# Shared OpenAI client — created once, reused across all agent calls
+_openai_client: Any = None
+
+
+def _get_openai_client() -> Any:
+    """Return a lazily-initialized shared AsyncOpenAI client."""
+    global _openai_client
+    if _openai_client is None:
+        from openai import AsyncOpenAI
+        kwargs: dict[str, Any] = {"api_key": OPENAI_API_KEY}
+        if OPENAI_BASE_URL:
+            kwargs["base_url"] = OPENAI_BASE_URL
+        _openai_client = AsyncOpenAI(**kwargs)
+    return _openai_client
+
+
+async def llm_call(agent: str, user_message: str, *, temperature: float | None = None) -> str:
+    """
+    Call the configured LLM for the given agent.
+    Uses per-agent temperature from AGENT_TEMPERATURES unless overridden.
+    Falls back to simulation if OPENAI_API_KEY is not set.
+    """
     if not OPENAI_API_KEY:
         add_log(f"[{agent}] Simulating (set OPENAI_API_KEY for real LLM).")
-        await asyncio.sleep(1)
+        await asyncio.sleep(0.2)
         slug = agent.lower().replace(" ", "_")
         return (
             f"[SIMULATED — no OPENAI_API_KEY]\n"
@@ -440,14 +571,10 @@ async def llm_call(agent: str, user_message: str) -> str:
             f"# {agent} placeholder for: {user_message[:120]}\n"
             f"def placeholder(): pass  # replace with real LLM output\n"
         )
+    temp = temperature if temperature is not None else AGENT_TEMPERATURES.get(agent, 0.2)
     try:
-        from openai import AsyncOpenAI
-
-        kwargs: dict[str, Any] = {"api_key": OPENAI_API_KEY}
-        if OPENAI_BASE_URL:
-            kwargs["base_url"] = OPENAI_BASE_URL
-        client = AsyncOpenAI(**kwargs)
-        add_log(f"[{agent}] Calling {OPENAI_MODEL}...")
+        client = _get_openai_client()
+        add_log(f"[{agent}] → {OPENAI_MODEL} (temp={temp})")
         resp = await client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=[
@@ -455,7 +582,7 @@ async def llm_call(agent: str, user_message: str) -> str:
                 {"role": "user",   "content": user_message},
             ],
             max_tokens=OPENAI_MAX_TOKENS,
-            temperature=0.3,
+            temperature=temp,
         )
         return resp.choices[0].message.content or ""
     except Exception as exc:
@@ -464,29 +591,69 @@ async def llm_call(agent: str, user_message: str) -> str:
 
 
 def parse_files_from_llm(output: str) -> list[dict]:
-    """Extract FILE: path blocks from LLM output."""
-    pattern = re.compile(
-        r"(?://|#|--)\s+FILE:\s+(.+?)\n(.*?)(?=(?://|#|--)\s+FILE:|\Z)",
+    """
+    Extract FILE: path blocks from LLM output.
+    Supports multiple marker styles emitted by different agents:
+      // FILE: path/to/file.tsx        (Frontend Dev)
+      # FILE: path/to/file.py          (Backend Dev, QA, DevOps)
+      -- FILE: migrations/0001_x.sql   (Database Engineer)
+      FILE: path/to/file.py            (bare fallback)
+    """
+    # Primary: comment-prefixed markers (// # --)
+    primary = re.compile(
+        r"(?://|#|--)" + r"\s+" + r"FILE:\s+(.+?)" + "\n" + r"(.*?)(?=(?://|#|--)" + r"\s+" + r"FILE:|\Z)",
         re.DOTALL,
     )
-    return [
+    files = [
         {"path": m.group(1).strip(), "content": m.group(2).strip()}
-        for m in pattern.finditer(output)
+        for m in primary.finditer(output)
     ]
+    if files:
+        return [f for f in files if f["path"] and f["content"]]
 
+    # Fallback: bare FILE: markers (some models omit the comment prefix)
+    fallback = re.compile(
+        r"^FILE:" + r"\s+" + r"(.+?)" + "\n" + r"(.*?)(?=^FILE:|\Z)",
+        re.DOTALL | re.MULTILINE,
+    )
+    files = [
+        {"path": m.group(1).strip(), "content": m.group(2).strip()}
+        for m in fallback.finditer(output)
+    ]
+    if files:
+        return [f for f in files if f["path"] and f["content"]]
 
+    # Last resort: markdown code blocks with filename on first line
+    md_block = re.compile(
+        r"```(?:python|typescript|tsx?|sql|yaml|dockerfile|bash|sh)?" + r"\s+([\w./\-]+\.\w+)" + "\n" + r"(.*?)```",
+        re.DOTALL | re.IGNORECASE,
+    )
+    files = [
+        {"path": m.group(1).strip(), "content": m.group(2).strip()}
+        for m in md_block.finditer(output)
+    ]
+    return [f for f in files if f["path"] and f["content"]]
 
-# ============================================================
-# 5.5  AGENT MEMORY  (cross-task learning stored in SQLite)
-# ============================================================
-
-async def memory_store(task_id: str, agent: str, category: str, content: str) -> None:
-    """Persist a key agent insight for injection into future pipeline runs."""
+async def memory_store(
+    task_id: str,
+    agent: str,
+    category: str,
+    content: str,
+    *,
+    tags: str = "",
+) -> None:
+    """
+    Persist a key agent insight for injection into future pipeline runs.
+    `tags` is a comma-separated string of searchable labels (e.g. 'auth,jwt,fastapi').
+    Content is capped at 1200 chars (up from 600) to preserve more context.
+    """
+    # Build tagged content prefix for richer recall
+    tagged = f"[tags:{tags}] {content}" if tags else content
     try:
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute(
                 "INSERT INTO agent_memory (task_id, agent, category, content) VALUES (?,?,?,?)",
-                (task_id, agent, category, content[:600]),
+                (task_id, agent, category, tagged[:1200]),
             )
             await db.commit()
     except Exception:
@@ -527,6 +694,67 @@ def _write_files_to_workspace(files: list[dict]) -> None:
             dest.write_text(f["content"], encoding="utf-8")
         except Exception:
             pass
+
+
+
+def _build_file_manifest(files: list[dict]) -> str:
+    """
+    Build a compact file manifest for cross-agent context injection.
+    Lists each generated file with its path, line count, and a preview line.
+    Keeps total output under ~2000 chars regardless of how many files.
+    """
+    if not files:
+        return "  (no files generated yet)"
+    lines: list[str] = []
+    for f in files[:40]:  # cap at 40 entries to stay within token budget
+        path = f.get("path", "?")
+        content = f.get("content", "")
+        loc = len(content.splitlines())
+        # First non-blank, non-comment line as preview
+        preview = next(
+            (ln.strip() for ln in content.splitlines()
+             if ln.strip() and not ln.strip().startswith(("#", "//", "--", "/*"))),
+            "",
+        )[:80]
+        lines.append(f"  {path}  ({loc} lines)  →  {preview}")
+    if len(files) > 40:
+        lines.append(f"  ... and {len(files) - 40} more files")
+    return "\n".join(lines)
+
+
+async def _validate_python_files(files: list[dict]) -> list[tuple[str, str]]:
+    """
+    Syntax-check every generated .py file using py_compile.
+    Returns a list of (path, error_message) for files that fail.
+    Fast: runs in-process, no subprocess overhead.
+    """
+    import py_compile
+    import tempfile
+
+    errors: list[tuple[str, str]] = []
+    for f in files:
+        if not f.get("path", "").endswith(".py"):
+            continue
+        content = f.get("content", "")
+        tmp_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".py", delete=False, encoding="utf-8"
+            ) as tmp:
+                tmp.write(content)
+                tmp_path = tmp.name
+            py_compile.compile(tmp_path, doraise=True)
+        except py_compile.PyCompileError as exc:
+            errors.append((f["path"], str(exc)))
+        except Exception as exc:
+            errors.append((f["path"], f"[validation error] {exc}"))
+        finally:
+            if tmp_path:
+                try:
+                    Path(tmp_path).unlink(missing_ok=True)
+                except Exception:
+                    pass
+    return errors
 
 
 async def _run_subprocess(cmd: list[str], cwd: Path, timeout: int = 60) -> tuple[int, str]:
@@ -992,6 +1220,7 @@ async def execute_pipeline(channel: Any, task: str) -> None:
     scan_passed = True
     qa_files:   list[dict] = []
     fe_out, be_out = "", ""
+    db_cumulative = ""   # accumulates DB schema across all phases
 
     try:
         # ── Recall past memories relevant to this task ────────────────────────
@@ -1036,7 +1265,10 @@ async def execute_pipeline(channel: Any, task: str) -> None:
             be_ctx = (
                 "Task (phase): " + phase + "\n\n"
                 "Full architecture:\n" + arch_out + "\n\n"
-                "Previously written BE:\n" + be_prev
+                "Files already generated:\n" + _build_file_manifest(all_files) + "\n\n"
+                + ("Database schema from previous phases:\n" + db_cumulative[-800:] + "\n\n"
+                   if db_cumulative else "")
+                + "Previously written BE:\n" + be_prev
             )
             fe_phase, be_phase = await asyncio.gather(
                 llm_call("Frontend Dev", fe_ctx),
@@ -1051,6 +1283,10 @@ async def execute_pipeline(channel: Any, task: str) -> None:
             _write_files_to_workspace(fe_files + be_files)
             add_log(f"[Frontend Dev] {len(fe_files)} file(s) written — {ph_label}")
             add_log(f"[Backend Dev]  {len(be_files)} file(s) written — {ph_label}")
+            # Syntax-validate generated Python files immediately
+            syn_errors = await _validate_python_files(be_files)
+            for fp, err in syn_errors:
+                add_log(f"[Backend Dev] ⚠️ Syntax error in {fp}: {err[:120]}")
             set_agent_status("Frontend Dev", "IDLE", "cyan")
             set_agent_status("Backend Dev",  "IDLE", "green")
 
@@ -1066,6 +1302,7 @@ async def execute_pipeline(channel: Any, task: str) -> None:
             all_files.extend(db_files)
             _write_files_to_workspace(db_files)
             add_log(f"[Database Engineer] {len(db_files)} migration(s) — {ph_label}")
+            db_cumulative += "\n" + db_out[:600]  # feed schema to Backend in next phase
             set_agent_status("Database Engineer", "IDLE", "gray")
 
         # QA GATE — test all generated files + retry loop
@@ -1076,9 +1313,10 @@ async def execute_pipeline(channel: Any, task: str) -> None:
 
             qa_ctx = (
                 "Task: " + task + "\n\n"
-                "Architecture:\n" + arch_out[:700] + "\n\n"
-                "Frontend code:\n" + fe_out[:1200] + "\n\n"
-                "Backend code:\n" + be_out[:1200]
+                "Architecture summary:\n" + arch_out[:1200] + "\n\n"
+                "Generated files manifest:\n" + _build_file_manifest(all_files) + "\n\n"
+                "Frontend code (latest phase):\n" + fe_phase[:1500] + "\n\n"
+                "Backend code (latest phase):\n" + be_phase[:1500]
             )
             if qa_attempt > 0 and ctx.get("test_output"):
                 qa_ctx += "\n\nTest failures to fix:\n" + ctx["test_output"][:600]
@@ -1114,9 +1352,11 @@ async def execute_pipeline(channel: Any, task: str) -> None:
             add_log(f"[Security Analyst] OWASP Top 10 review{retry_lbl}...")
 
             sec_ctx = (
-                "Review for OWASP Top 10:\n\n"
-                "Frontend:\n" + fe_out[:1000] + "\n\n"
-                "Backend:\n" + be_out[:1000]
+                "Review for OWASP Top 10 + OWASP ASVS Level 2 + CWE Top 25:\n\n"
+                "Generated files:\n" + _build_file_manifest(all_files) + "\n\n"
+                "Backend code (full latest phase):\n" + be_phase[:2000] + "\n\n"
+                "Frontend code (full latest phase):\n" + fe_phase[:1000] + "\n\n"
+                "Database schema:\n" + db_cumulative[-400:]
             )
             if sec_attempt > 0 and ctx.get("scan_output"):
                 sec_ctx += "\n\nPrevious scan findings:\n" + ctx["scan_output"][:500]
@@ -1195,10 +1435,15 @@ async def execute_pipeline(channel: Any, task: str) -> None:
         add_log(f"[Project Manager] {pm_out.splitlines()[0][:120]}")
 
         # ── Persist agent memories for future runs ────────────────────────────
-        await memory_store(task_id, "Architect",        "architecture", arch_out[:500])
-        await memory_store(task_id, "Backend Dev",      "patterns",     be_out[:400])
-        await memory_store(task_id, "Security Analyst", "findings",     ctx.get("security", "")[:400])
-        await memory_store(task_id, "Project Manager",  "delivery",     pm_out[:400])
+        # Derive simple tech-stack tags for searchable memory recall
+        _task_lower = task.lower()
+        _tags = ",".join(w for w in ["auth", "stripe", "postgres", "redis", "docker", "k8s",
+                                     "react", "nextjs", "fastapi", "celery", "websocket"]
+                         if w in _task_lower or w in arch_out.lower()[:300])
+        await memory_store(task_id, "Architect",        "architecture", arch_out[:1000], tags=_tags)
+        await memory_store(task_id, "Backend Dev",      "patterns",     be_out[:800],   tags=_tags)
+        await memory_store(task_id, "Security Analyst", "findings",     ctx.get("security", "")[:600], tags="security")
+        await memory_store(task_id, "Project Manager",  "delivery",     pm_out[:600],   tags=_tags)
 
         # ── History entry ─────────────────────────────────────────────────────
         history_entry: dict[str, Any] = {
@@ -1289,7 +1534,7 @@ async def lifespan(app: FastAPI):  # type: ignore[type-arg]
         pass
 
 
-app = FastAPI(title="AI Dev Team -- Agent Mesh", version="3.0.0", lifespan=lifespan)
+app = FastAPI(title="AI Dev Team -- Agent Mesh", version="5.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

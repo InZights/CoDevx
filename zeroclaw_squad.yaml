@@ -83,7 +83,7 @@ orchestrator:
   name: "Project Manager"
   provider: "openai"          # real LLM via OPENAI_API_KEY; falls back to simulation
   mode: "api"
-  profile: ".github/agents/manager.md"
+  # system_prompt: defined inline in agent_mesh.py AGENT_SYSTEM_PROMPTS["Project Manager"]
   approval_required: true
   approval_timeout_minutes: 30
 
@@ -143,7 +143,6 @@ agents:
   - name: "Architect"
     role: "System Designer"
     provider: "openai"
-    profile: ".github/agents/architect.md"
     tools: ["codebase-search", "read-file", "filesystem"]
     instructions: "Analyze the codebase structure. Design APIs, define interfaces, validate tech stack decisions. Always output a structured design doc before any code is written."
     triggers: ["design", "architect", "review structure", "plan"]
@@ -151,7 +150,6 @@ agents:
   - name: "Frontend Dev"
     role: "UI Engineer"
     provider: "openai"
-    profile: ".github/agents/frontend.md"
     tools: ["filesystem", "shell", "npm"]
     instructions: "Write React components with TypeScript. Use Tailwind CSS for styling. Ensure mobile-first responsive design. Follow WCAG 2.1 accessibility standards."
     triggers: ["component", "ui", "react", "frontend", "tsx", "css", "tailwind"]
@@ -159,7 +157,6 @@ agents:
   - name: "Backend Dev"
     role: "API Engineer"
     provider: "openai"
-    profile: ".github/agents/backend.md"
     tools: ["filesystem", "shell", "python"]
     instructions: "Write FastAPI endpoints with Python 3.12 type hints. Validate all input with Pydantic. Never expose raw exceptions to clients. Use async/await throughout."
     triggers: ["endpoint", "api", "route", "fastapi", "backend", "python"]
@@ -167,7 +164,6 @@ agents:
   - name: "QA Engineer"
     role: "Test Lead"
     provider: "openai"
-    profile: ".github/agents/qa.md"
     tools: ["pytest", "vitest", "coverage", "shell"]
     instructions: "Write test suites for every feature. Enforce minimum 80% test coverage. Run pytest for Python and Vitest for TypeScript. Fail the pipeline if coverage drops."
     triggers: ["test", "qa", "coverage", "pytest", "vitest", "bug"]
@@ -175,7 +171,6 @@ agents:
   - name: "DevOps Engineer"
     role: "Infrastructure & CI"
     provider: "openai"
-    profile: ".github/agents/devops.md"
     tools: ["docker", "github-actions", "shell", "filesystem"]
     instructions: "Write Dockerfiles with multi-stage builds. Create GitHub Actions workflows for CI/CD. Use least-privilege principles in all configurations."
     triggers: ["docker", "ci", "deploy", "pipeline", "github actions", "devops", "infra"]
@@ -183,7 +178,6 @@ agents:
   - name: "Security Analyst"
     role: "AppSec Engineer"
     provider: "openai"
-    profile: ".github/agents/security.md"
     tools: ["bandit", "npm-audit", "trivy", "shell"]
     instructions: "Run bandit on Python code. Run npm audit on frontend. Scan Docker images with trivy. Reject any commit that introduces OWASP Top 10 vulnerabilities or secrets in code."
     triggers: ["security", "vulnerability", "auth", "owasp", "audit", "secret", "cve"]
@@ -191,7 +185,6 @@ agents:
   - name: "Database Engineer"
     role: "Data Layer Engineer"
     provider: "openai"
-    profile: ".github/agents/database.md"
     tools: ["alembic", "sql", "filesystem", "shell"]
     instructions: "Design normalized database schemas. Write Alembic migrations. Optimize queries. Never use raw string formatting for SQL — always use parameterized queries."
     triggers: ["database", "schema", "migration", "sql", "model", "orm", "alembic"]
