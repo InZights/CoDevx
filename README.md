@@ -12,18 +12,19 @@
 4. [Architecture](#architecture)
 5. [Prerequisites](#prerequisites)
 6. [Quick Start (local dev)](#quick-start-local-dev)
-7. [Docker Deployment](#docker-deployment)
-8. [Messaging Provider Setup](#messaging-provider-setup)
+7. [IDE Integration (VS Code · Cursor · Antigravity)](#ide-integration-vs-code--cursor--antigravity)
+8. [Docker Deployment](#docker-deployment)
+9. [Messaging Provider Setup](#messaging-provider-setup)
    - [Discord](#discord)
    - [WhatsApp via Twilio](#whatsapp-via-twilio)
    - [ZeroClaw (all channels)](#zeroclaw-all-channels-unified-gateway)
-9. [LLM Configuration](#llm-configuration)
-10. [Configuration Reference](#configuration-reference)
-11. [The SDLC Pipeline](#the-sdlc-pipeline)
-12. [Pipeline v4.0 — Production Features](#pipeline-v40--production-features)
-13. [Command Center UI](#command-center-ui)
-14. [Project Structure](#project-structure)
-15. [Development Guide](#development-guide)
+10. [LLM Configuration](#llm-configuration)
+11. [Configuration Reference](#configuration-reference)
+12. [The SDLC Pipeline](#the-sdlc-pipeline)
+13. [Pipeline v4.0 — Production Features](#pipeline-v40--production-features)
+14. [Command Center UI](#command-center-ui)
+15. [Project Structure](#project-structure)
+16. [Development Guide](#development-guide)
 
 ---
 
@@ -208,6 +209,62 @@ Via REST API: `POST http://localhost:8000/api/order`
 ```
 
 The pipeline starts. Watch agents activate in the Command Center UI. Receive the delivery report with your PR link.
+
+---
+
+## IDE Integration (VS Code · Cursor · Antigravity)
+
+CoDevx exposes an **MCP (Model Context Protocol) server** at `http://localhost:8000/mcp`, letting VS Code Copilot, Cursor AI, and Google Antigravity invoke the full 8-agent pipeline directly from their chat/agent panels — no Discord or WhatsApp required.
+
+### Available MCP Tools
+
+| Tool | Parameters | Description |
+|------|-----------|-------------|
+| `codevx_submit_order` | `task: str` | Submit a task — starts the full SDLC pipeline |
+| `codevx_get_state` | — | All agent statuses + active task |
+| `codevx_get_history` | — | Completed tasks with files, branch, PR URL |
+| `codevx_get_logs` | `limit?: int` | Recent pipeline activity logs |
+| `codevx_get_agent` | `name: str` | Status of a specific agent |
+
+### VS Code (GitHub Copilot)
+
+Copilot auto-reads `.github/copilot-instructions.md` for workspace context. To enable MCP tool calling, add the CoDevx server to your `.vscode/settings.json`:
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "codevx": {
+        "type": "http",
+        "url": "http://localhost:8000/mcp"
+      }
+    }
+  }
+}
+```
+
+Then in Copilot Chat:
+> _"Submit an order to CoDevx: build a Stripe billing integration with webhook support"_
+
+### Cursor AI
+
+Cursor auto-discovers MCP servers via `.mcp.json` at the project root (already included). The `.cursor/rules/codevx.mdc` file is loaded with `alwaysApply: true`, giving Cursor full project context.
+
+In Cursor Composer or Chat:
+> _"Use the CoDevx MCP tool to submit an order: add OAuth2 Google login"_
+
+### Google Antigravity
+
+Antigravity reads `AGENTS.md` and `.mcp.json` to discover agents and tools. Start CoDevx, then point Antigravity at `http://localhost:8000/mcp`.
+
+### IDE integration files at a glance
+
+| File | Read by | Purpose |
+|------|---------|--------|
+| `.mcp.json` | Cursor, Antigravity | MCP server discovery |
+| `.github/copilot-instructions.md` | VS Code Copilot | Workspace instructions + code standards |
+| `.cursor/rules/codevx.mdc` | Cursor AI | Project rules (`alwaysApply: true`) |
+| `AGENTS.md` | All AI-native IDEs | Universal agent manifest |
 
 ---
 
@@ -403,6 +460,12 @@ Copy `.env.example` to `.env` and configure:
 | `ZEROCLAW_GATEWAY_URL` | `http://localhost:42617` | ZeroClaw daemon URL |
 | `ZEROCLAW_WEBHOOK_SECRET` | — | HMAC-SHA256 shared secret |
 
+### IDE / MCP
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MCP_ENABLED` | `true` | Enable `/mcp` endpoint for IDE integration |
+
 ### Pipeline Tuning (v4.0)
 
 | Variable | Default | Description |
@@ -558,13 +621,19 @@ The React PWA provides a real-time dashboard for monitoring the pipeline.
 ```
 AI-DEV-TEAM/
 │
-├── agent_mesh.py              # FastAPI backend (core — 1,518 lines)
+├── agent_mesh.py              # FastAPI backend + MCP server (core)
 ├── requirements.txt           # Python dependencies
 ├── Dockerfile                 # Backend container image
 ├── docker-compose.yml         # Full-stack orchestration
 ├── .env.example               # Environment variable template → copy to .env
 ├── .gitignore                 # Git ignore rules
 ├── zeroclaw_squad.yaml        # Team/agent/pipeline configuration
+├── .mcp.json                  # MCP server discovery (Cursor / Antigravity)
+├── AGENTS.md                  # Universal agent manifest (all AI-native IDEs)
+├── .github/
+│   └── copilot-instructions.md  # VS Code Copilot workspace instructions
+└── .cursor/
+    └── rules/codevx.mdc       # Cursor AI project rules
 │
 ├── command-center/            # React 19 + TypeScript + Tailwind PWA
 │   ├── Dockerfile             # Multi-stage: Node build → Nginx
@@ -601,7 +670,7 @@ AI-DEV-TEAM/
 │           └── colors.ts
 │
 └── docs/
-    ├── architecture.md            # Extended architecture notes
+    ├── architecture.md            # Extended architecture notes (MCP, APIs, DB schema)
     └── zeroclaw/
         ├── config.toml.example    # ZeroClaw gateway config template
         └── sop.yaml.example       # ZeroClaw SOP webhook templates
