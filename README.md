@@ -785,15 +785,6 @@ AI-DEV-TEAM/
 ├── config/                    # IDE and tool configuration files
 │   └── antigravity_mcp_config.json  # Paste into Antigravity MCP store
 │
-├── scripts/                   # Development and maintenance scripts
-│   └── patches/               # One-shot patch scripts (historical reference)
-│       ├── _patch_mcp.py
-│       ├── _patch_llm_provider.py
-│       ├── _patch_ide_tools.py
-│       ├── _patch_multillm.py
-│       ├── _patch_langgraph.py
-│       └── _patch_wa_hitl.py
-│
 ├── command-center/            # React 19 + TypeScript + Tailwind PWA dashboard
 │   ├── Dockerfile             # Multi-stage: Node build → Nginx
 │   ├── nginx.conf             # Reverse proxy to backend
