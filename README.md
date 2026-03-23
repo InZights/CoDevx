@@ -13,7 +13,7 @@
 5. [Prerequisites](#prerequisites)
 6. [Quick Start (local dev)](#quick-start-local-dev)
 7. [IDE Integration (VS Code · Cursor · Antigravity)](#ide-integration-vs-code--cursor--antigravity)
-   - [Copilot Bridge — agents USE Copilot](#copilot-bridge--agents-use-copilot)
+   - [IDE Chatbot Tools — agents consult Copilot, Cursor, Antigravity](#ide-chatbot-tools--agents-consult-copilot-cursor-antigravity)
 8. [Docker Deployment](#docker-deployment)
 9. [Messaging Provider Setup](#messaging-provider-setup)
    - [Discord](#discord)
@@ -269,16 +269,42 @@ Antigravity reads `AGENTS.md` and `.mcp.json` to discover agents and tools. Star
 
 ---
 
-### Copilot Bridge — agents USE Copilot
+### IDE Chatbot Tools — agents consult Copilot, Cursor, Antigravity
 
-The MCP integration above is **IDE → CoDevx** (you invoke the pipeline from chat). The **Copilot Bridge** goes the other direction: **CoDevx's 8 agents call GitHub Copilot** as their LLM engine, so every agent prompt, code-generation, and review flows through your Copilot subscription rather than OpenAI directly.
+CoDevx has **two distinct IDE integration modes** that work independently or together:
+
+| Mode | Direction | What it does |
+|------|-----------|-------------|
+| **MCP server** | IDE → CoDevx | You invoke the 8-agent pipeline from your IDE chat |
+| **LLM_PROVIDER=copilot** | CoDevx → Copilot | Copilot *replaces* OpenAI as the agents' brain |
+| **IDE_TOOLS_ENABLED=true** | CoDevx ↔ IDE | Agents *consult* Copilot/Cursor/Antigravity as specialist tools during pipeline work, while keeping their configured LLM brain |
+
+**The IDE Chatbot Tools mode** is what lets the agents actively use and interact with the chatbots in the three IDEs:
 
 ```
-agent_mesh.py
-  └─ _call_copilot_bridge()  ─HTTP POST─▶  codevx-vscode-bridge
-                                              └─ vscode.lm API
-                                                   └─ GitHub Copilot (gpt-4o)
+                  ┌─────────────────────────────────────────────┐
+                  │            agent_mesh.py (brain: LLM)       │
+                  │                                             │
+                  │  Architect ──consult_ide_chatbot()──────────┼──▶ GitHub Copilot (VS Code)
+                  │  Backend Dev ──────────────────────────────┼──▶ Cursor AI
+                  │  QA Engineer ──────────────────────────────┼──▶ Google Antigravity
+                  │  Security Analyst ─────────────────────────┘
+                  └─────────────────────────────────────────────┘
+                                         ▲
+                             codevx-vscode-bridge
+                             (VS Code extension :8001)
+                             vscode.lm API + workspace context
 ```
+
+**When agents consult the IDE chatbots:**
+
+| Agent | Consults IDE chatbot for... |
+|-------|-----------------------------|
+| Architect | Architecture review — scalability, design patterns, second opinion |
+| Backend Dev | Code review after generation — patterns, best practices |
+| Frontend Dev | UI/UX review — accessibility (WCAG 2.1 AA), component patterns |
+| QA Engineer | Additional test case suggestions — edge cases, error paths, security tests |
+| Security Analyst | Vulnerability hints before running bandit — OWASP Top 10, injection |
 
 **Setup (5 minutes):**
 
@@ -287,43 +313,50 @@ agent_mesh.py
    cd codevx-vscode-bridge
    npm install
    npm run compile
-   # --- then press F5 in VS Code to run the extension, or package it:
    npx vsce package
    code --install-extension codevx-vscode-bridge-1.0.0.vsix
    ```
 
-2. **Verify the bridge is alive** — a `CoDevx Bridge ●` item appears in the VS Code status bar. You can also run:
+2. **Verify the bridge is running** — a `CoDevx Bridge :8001` item appears in the VS Code status bar:
    ```bash
    curl http://localhost:8001/health
-   # → {"status":"ok","models":[{"id":"copilot/gpt-4o",...}]}
+   # → {"status":"ok","capabilities":["copilot","cursor","workspace-context"],...}
    ```
 
-3. **Switch CoDevx to Copilot provider** in your `.env`:
+3. **Enable IDE chatbot tools** in your `.env`:
    ```env
-   LLM_PROVIDER=copilot
+   IDE_TOOLS_ENABLED=true
+   IDE_CHATBOT=copilot          # copilot | cursor | antigravity | all
    COPILOT_BRIDGE_URL=http://localhost:8001
    ```
 
-4. **Restart CoDevx** — all 8 agents now use Copilot.
+   For Google Antigravity (Gemini Code Assist), also add:
+   ```env
+   IDE_CHATBOT=antigravity
+   ANTIGRAVITY_API_URL=https://generativelanguage.googleapis.com/v1beta/openai
+   ANTIGRAVITY_API_KEY=your_google_api_key
+   ANTIGRAVITY_MODEL=gemini-2.0-flash
+   ```
 
-**How it works:**
+4. **Restart CoDevx** — agents now consult the IDE chatbot at each key pipeline stage.
+
+**LLM brain configuration** (independent of IDE tools):
 
 | Setting | Effect |
 |---------|--------|
-| `LLM_PROVIDER=openai` | Default — calls OpenAI API directly |
-| `LLM_PROVIDER=copilot` | Routes every agent prompt through `vscode.lm` (Copilot) |
-| `LLM_PROVIDER=cursor` | Same bridge protocol, routes through Cursor AI models |
-| `LLM_PROVIDER=simulate` | No LLM calls at all — useful for pipeline/CI testing |
-
-If the bridge is unreachable, CoDevx gracefully falls back to OpenAI (if `OPENAI_API_KEY` is set) and then to simulation — no crash, no user action needed.
+| `LLM_PROVIDER=openai` | Default — agents use OpenAI API as brain |
+| `LLM_PROVIDER=copilot` | Agents use GitHub Copilot as brain (all LLM calls routed through bridge) |
+| `LLM_PROVIDER=cursor` | Agents use Cursor AI as brain (same bridge protocol) |
+| `LLM_PROVIDER=simulate` | No LLM calls — useful for CI/CD pipeline testing |
 
 **Bridge HTTP API** (used internally by `agent_mesh.py`):
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/health` | GET | Bridge status + available models |
-| `/models` | GET | All Copilot models detected by `vscode.lm` |
-| `/chat` | POST | `{agent, system, user, model?}` → `{content, model, vendor}` |
+| `/health` | GET | Bridge status, capabilities, available Copilot models |
+| `/models` | GET | All models detected by `vscode.lm` |
+| `/chat` | POST | `{agent, system, user, model?, ide?, include_workspace?}` → `{content, model, vendor, ide}` |
+| `/workspace-context` | GET | Currently open VS Code files (path, language, 120-line preview) |
 
 ---
 
@@ -524,8 +557,13 @@ Copy `.env.example` to `.env` and configure:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MCP_ENABLED` | `true` | Enable `/mcp` endpoint for IDE integration |
-| `LLM_PROVIDER` | `openai` | `openai` \| `copilot` \| `cursor` \| `simulate` — which LLM engine agents use |
-| `COPILOT_BRIDGE_URL` | `http://localhost:8001` | URL of the codevx-vscode-bridge extension (only for `copilot`/`cursor`) |
+| `LLM_PROVIDER` | `openai` | `openai` \| `copilot` \| `cursor` \| `simulate` — which LLM engine agents use as their brain |
+| `COPILOT_BRIDGE_URL` | `http://localhost:8001` | URL of the codevx-vscode-bridge extension (used by `copilot`/`cursor` provider and IDE tools) |
+| `IDE_TOOLS_ENABLED` | `false` | Agents consult IDE chatbots as supplementary tools during pipeline |
+| `IDE_CHATBOT` | `copilot` | `copilot` \| `cursor` \| `antigravity` \| `all` — which chatbot(s) agents consult |
+| `ANTIGRAVITY_API_URL` | — | Google Antigravity / Gemini Code Assist OpenAI-compatible endpoint |
+| `ANTIGRAVITY_API_KEY` | — | Google API key for Antigravity |
+| `ANTIGRAVITY_MODEL` | `gemini-2.0-flash` | Antigravity model to use |
 
 ### Pipeline Tuning (v4.0)
 

@@ -80,6 +80,17 @@ OPENAI_MAX_TOKENS = int(os.getenv("OPENAI_MAX_TOKENS", "4000"))   # tokens per a
 # Providers: openai | copilot | cursor | simulate
 LLM_PROVIDER       = os.getenv("LLM_PROVIDER", "openai")  # default: OpenAI API
 COPILOT_BRIDGE_URL = os.getenv("COPILOT_BRIDGE_URL", "http://localhost:8001")  # VS Code bridge
+
+# IDE Chatbot Tools -- agents consult IDE chatbots as SUPPLEMENTARY specialists
+# This is independent of LLM_PROVIDER (the brain); these are additional consultants.
+# Set IDE_TOOLS_ENABLED=true and at least one IDE source to activate.
+IDE_TOOLS_ENABLED   = os.getenv("IDE_TOOLS_ENABLED", "false").lower() == "true"
+IDE_CHATBOT         = os.getenv("IDE_CHATBOT", "copilot")  # copilot | cursor | antigravity | all
+# Google Antigravity / Gemini Code Assist (OpenAI-compatible endpoint)
+ANTIGRAVITY_API_URL = os.getenv("ANTIGRAVITY_API_URL", "")   # e.g. https://generativelanguage.googleapis.com/v1beta/openai
+ANTIGRAVITY_API_KEY = os.getenv("ANTIGRAVITY_API_KEY", "")   # Google Cloud / AI Studio API key
+ANTIGRAVITY_MODEL   = os.getenv("ANTIGRAVITY_MODEL", "gemini-2.0-flash")  # or gemini-2.5-pro, etc.
+
 MAX_RETRIES       = int(os.getenv("MAX_RETRIES", "2"))             # QA / Security retry attempts
 MAX_SUBTASKS      = int(os.getenv("MAX_SUBTASKS", "5"))            # max implementation phases
 ENABLE_REAL_TOOLS = os.getenv("ENABLE_REAL_TOOLS", "true").lower() == "true"  # run pytest/bandit/npm-audit
@@ -1247,7 +1258,104 @@ async def _discord_post(channel_id: int, message: str) -> None:
 # 9. EXECUTION PIPELINE
 # ============================================================
 
+# ============================================================
+# 6.  IDE CHATBOT TOOLS  (Copilot / Cursor / Antigravity)
+# ============================================================
+
+async def consult_ide_chatbot(
+    agent: str,
+    topic: str,
+    context: str,
+    *,
+    ide: str | None = None,
+) -> str:
+    """
+    Let an agent consult an IDE chatbot (GitHub Copilot, Cursor AI, or
+    Google Antigravity) as a SUPPLEMENTARY TOOL -- separate from the
+    agent's main LLM brain (LLM_PROVIDER).
+
+    `topic`   -- short label, e.g. "code review", "test suggestions"
+    `context` -- the code / question to send to the IDE chatbot
+    `ide`     -- "copilot" | "cursor" | "antigravity" | "all"
+                 defaults to the IDE_CHATBOT env setting.
+
+    Returns combined IDE chatbot response, or empty string if unavailable.
+    """
+    if not IDE_TOOLS_ENABLED:
+        return ""
+
+    target = ide or IDE_CHATBOT
+    ides   = ["copilot", "cursor", "antigravity"] if target == "all" else [target]
+    parts: list[str] = []
+
+    for _ide in ides:
+        if _ide in ("copilot", "cursor"):
+            # Route through the VS Code extension bridge (:8001)
+            payload = {
+                "agent": agent,
+                "system": (
+                    f"You are the {_ide.title()} AI assistant integrated into "
+                    f"an autonomous software development pipeline. "
+                    f"Provide concise, actionable {topic}."
+                ),
+                "user": context[:3000],
+                "ide": _ide,
+            }
+            try:
+                import httpx
+                async with httpx.AsyncClient(timeout=120.0) as client:
+                    resp = await client.post(
+                        f"{COPILOT_BRIDGE_URL}/chat", json=payload
+                    )
+                    resp.raise_for_status()
+                    result = resp.json().get("content", "")
+                    if result:
+                        parts.append(f"### {_ide.title()} says:\n{result}")
+                        add_log(f"[{agent}] [{_ide.title()}] {topic}: {result[:80]}")
+            except Exception as exc:
+                add_log(f"[{agent}] [{_ide.title()}] bridge unreachable: {exc}")
+
+        elif _ide == "antigravity":
+            # Google Antigravity / Gemini Code Assist (OpenAI-compatible REST)
+            if not ANTIGRAVITY_API_KEY or not ANTIGRAVITY_API_URL:
+                add_log(
+                    f"[{agent}] [Antigravity] skipped -- "
+                    "ANTIGRAVITY_API_URL and ANTIGRAVITY_API_KEY required"
+                )
+                continue
+            try:
+                from openai import AsyncOpenAI as _AGClient
+                ag = _AGClient(
+                    api_key=ANTIGRAVITY_API_KEY,
+                    base_url=ANTIGRAVITY_API_URL,
+                )
+                ag_resp = await ag.chat.completions.create(
+                    model=ANTIGRAVITY_MODEL,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "You are Google Antigravity, an AI coding assistant. "
+                                f"Provide concise, actionable {topic}."
+                            ),
+                        },
+                        {"role": "user", "content": context[:3000]},
+                    ],
+                    max_tokens=1200,
+                    temperature=0.3,
+                )
+                result = ag_resp.choices[0].message.content or ""
+                if result:
+                    parts.append(f"### Antigravity says:\n{result}")
+                    add_log(f"[{agent}] [Antigravity] {topic}: {result[:80]}")
+            except Exception as exc:
+                add_log(f"[{agent}] [Antigravity] error: {exc}")
+
+    return "\n\n".join(parts)
+
+
 async def execute_pipeline(channel: Any, task: str) -> None:
+
     """
     Full 8-agent SDLC pipeline (v4.0):
       Architect (1x, full design) -> Decompose -> N x [Frontend+Backend+Database]
@@ -1280,6 +1388,16 @@ async def execute_pipeline(channel: Any, task: str) -> None:
         if mem_ctx:
             arch_prompt += "\n\nRelevant context from past builds:\n" + mem_ctx
         arch_out = await llm_call("Architect", arch_prompt)
+        # IDE Chatbot: second opinion on the architecture design
+        if IDE_TOOLS_ENABLED:
+            ide_arch_review = await consult_ide_chatbot(
+                "Architect",
+                "architecture review (scalability, maintainability, design patterns)",
+                f"Review this software architecture plan and suggest improvements:\n\n{arch_out[:2500]}",
+            )
+            if ide_arch_review:
+                arch_out += f"\n\n<!-- IDE Architecture Review -->\n{ide_arch_review[:600]}"
+                add_log("[Architect] IDE architecture review appended.")
         ctx["arch"] = arch_out
         add_log(f"[Architect] {arch_out.splitlines()[0][:120]}")
         add_log("[Architect] Architecture complete.")
@@ -1328,6 +1446,27 @@ async def execute_pipeline(channel: Any, task: str) -> None:
             _write_files_to_workspace(fe_files + be_files)
             add_log(f"[Frontend Dev] {len(fe_files)} file(s) written — {ph_label}")
             add_log(f"[Backend Dev]  {len(be_files)} file(s) written — {ph_label}")
+
+            # IDE Chatbot: Backend code review (runs only when IDE_TOOLS_ENABLED=true)
+            if IDE_TOOLS_ENABLED and be_phase.strip():
+                ide_review = await consult_ide_chatbot(
+                    "Backend Dev",
+                    "code review and improvement suggestions",
+                    f"Review this backend code for quality, patterns, and best practices:\n\n{be_phase[:2500]}",
+                )
+                if ide_review:
+                    ctx["ide_be_review"] = ide_review
+                    add_log(f"[Backend Dev] IDE review stored — {ph_label}")
+            if IDE_TOOLS_ENABLED and fe_phase.strip():
+                ide_fe_review = await consult_ide_chatbot(
+                    "Frontend Dev",
+                    "UI/UX code review and accessibility suggestions",
+                    f"Review this frontend code for quality, accessibility (WCAG 2.1 AA), and patterns:\n\n{fe_phase[:2000]}",
+                )
+                if ide_fe_review:
+                    ctx["ide_fe_review"] = ide_fe_review
+                    add_log(f"[Frontend Dev] IDE review stored — {ph_label}")
+
             # Syntax-validate generated Python files immediately
             syn_errors = await _validate_python_files(be_files)
             for fp, err in syn_errors:
@@ -1365,6 +1504,17 @@ async def execute_pipeline(channel: Any, task: str) -> None:
             )
             if qa_attempt > 0 and ctx.get("test_output"):
                 qa_ctx += "\n\nTest failures to fix:\n" + ctx["test_output"][:600]
+
+            # IDE Chatbot: ask for additional test case suggestions before writing tests
+            if IDE_TOOLS_ENABLED and be_phase.strip():
+                ide_test_hints = await consult_ide_chatbot(
+                    "QA Engineer",
+                    "test case suggestions (edge cases, error paths, security tests)",
+                    f"Suggest additional test cases for this code:\n\n{be_phase[:2000]}",
+                )
+                if ide_test_hints:
+                    qa_ctx += f"\n\nIDE chatbot test suggestions:\n{ide_test_hints[:800]}"
+                    add_log("[QA Engineer] IDE test hints incorporated.")
 
             qa_out  = await llm_call("QA Engineer", qa_ctx)
             ctx["qa"] = qa_out
@@ -1405,6 +1555,17 @@ async def execute_pipeline(channel: Any, task: str) -> None:
             )
             if sec_attempt > 0 and ctx.get("scan_output"):
                 sec_ctx += "\n\nPrevious scan findings:\n" + ctx["scan_output"][:500]
+
+            # IDE Chatbot: get security vulnerability hints before LLM scan
+            if IDE_TOOLS_ENABLED and be_phase.strip():
+                ide_sec_hints = await consult_ide_chatbot(
+                    "Security Analyst",
+                    "security vulnerability analysis (OWASP Top 10, injection, auth flaws)",
+                    f"Identify security vulnerabilities in this backend code:\n\n{be_phase[:2000]}",
+                )
+                if ide_sec_hints:
+                    sec_ctx += f"\n\nIDE chatbot security hints:\n{ide_sec_hints[:800]}"
+                    add_log("[Security Analyst] IDE security hints incorporated.")
 
             sec_out     = await llm_call("Security Analyst", sec_ctx)
             ctx["security"] = sec_out

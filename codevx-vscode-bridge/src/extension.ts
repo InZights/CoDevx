@@ -11,6 +11,8 @@ interface ChatRequest {
   user: string;       // user / task message
   temperature?: number;
   model?: string;     // override model family
+  ide?: string;       // "copilot" | "cursor" | "antigravity" — which IDE chatbot is being consulted
+  include_workspace?: boolean; // if true, attach open file context to the prompt
 }
 
 interface ChatResponse {
@@ -92,10 +94,11 @@ async function startServer(context: vscode.ExtensionContext): Promise<void> {
 
   updateStatusBar(port, true);
   outputChannel.appendLine(`[Bridge] Started on http://127.0.0.1:${port}`);
-  outputChannel.appendLine(`[Bridge] Set COPILOT_BRIDGE_URL=http://localhost:${port} in CoDevx .env`);
-  outputChannel.appendLine(`[Bridge] Set LLM_PROVIDER=copilot in CoDevx .env`);
+  outputChannel.appendLine(`[Bridge] Endpoints: /health  /models  /chat  /workspace-context`);
+  outputChannel.appendLine(`[Bridge] Brain config:     set LLM_PROVIDER=copilot  in CoDevx .env`);
+  outputChannel.appendLine(`[Bridge] IDE tools config: set IDE_TOOLS_ENABLED=true in CoDevx .env`);
   vscode.window.showInformationMessage(
-    `CoDevx Copilot Bridge running on port ${port}. Set LLM_PROVIDER=copilot in .env.`
+    `CoDevx Bridge running on :${port} — agents can now consult Copilot/Cursor as IDE tools.`
   );
 }
 
@@ -120,10 +123,15 @@ async function handleRequest(
 
   // ── Health check ──────────────────────────────────────────────────────────
   if (req.method === "GET" && url === "/health") {
+    const models = await vscode.lm.selectChatModels({ vendor: "copilot" }).catch(() => []);
     sendJson(res, 200, {
       status: "ok",
       bridge: "codevx-vscode-copilot",
-      version: "1.0.0",
+      version: "1.1.0",
+      capabilities: ["copilot", "cursor", "workspace-context"],
+      copilot_available: models.length > 0,
+      active_models: models.slice(0, 3).map((m) => ({ id: m.id, family: m.family })),
+      workspace_files: vscode.workspace.textDocuments.length,
     });
     return;
   }
@@ -147,6 +155,23 @@ async function handleRequest(
     return;
   }
 
+  // ── Workspace context endpoint ────────────────────────────────────────────
+  // Returns snippets of files currently open in VS Code so agents can use them.
+  if (req.method === "GET" && (url === "/workspace-context" || url.startsWith("/workspace-context?"))) {
+    const openDocs = vscode.workspace.textDocuments
+      .filter((d) => !d.isUntitled && d.uri.scheme === "file")
+      .slice(0, 10); // cap at 10 files to stay within token budget
+    const files = openDocs.map((d) => ({
+      path: vscode.workspace.asRelativePath(d.uri),
+      language: d.languageId,
+      lines: d.lineCount,
+      // First 120 lines of each file as preview context
+      preview: d.getText().split("\n").slice(0, 120).join("\n"),
+    }));
+    sendJson(res, 200, { workspace_files: files });
+    return;
+  }
+
   // ── Chat endpoint ─────────────────────────────────────────────────────────
   if (req.method === "POST" && url === "/chat") {
     const body = await readBody(req);
@@ -158,21 +183,36 @@ async function handleRequest(
       return;
     }
 
-    const { agent = "Unknown", system = "", user = "", model } = payload;
+    const { agent = "Unknown", system = "", user = "", model, ide = "copilot", include_workspace = false } = payload;
     if (!user) {
       sendJson(res, 400, { error: "'user' field is required" } as ErrorResponse);
       return;
     }
 
-    outputChannel.appendLine(`[Bridge] ${agent} → Copilot (model=${model ?? "default"})`);
+    // Optionally enrich prompt with currently-open workspace file context
+    let enrichedUser = user;
+    if (include_workspace) {
+      const openDocs = vscode.workspace.textDocuments
+        .filter((d) => !d.isUntitled && d.uri.scheme === "file")
+        .slice(0, 5);
+      if (openDocs.length) {
+        const wsContext = openDocs
+          .map((d) => `// ${vscode.workspace.asRelativePath(d.uri)}\n${d.getText().slice(0, 800)}`)
+          .join("\n\n---\n\n");
+        enrichedUser = `${user}\n\n=== Currently open workspace files (IDE context) ===\n${wsContext}`;
+        outputChannel.appendLine(`[Bridge] Attached ${openDocs.length} workspace file(s) to prompt.`);
+      }
+    }
+
+    outputChannel.appendLine(`[Bridge][${ide.toUpperCase()}] ${agent} → model=${model ?? "default"}`);
 
     try {
-      const result = await callCopilot(system, user, model);
-      outputChannel.appendLine(`[Bridge] ${agent} ← ${result.model} (${result.content.length} chars)`);
-      sendJson(res, 200, result);
+      const result = await callCopilot(system, enrichedUser, model);
+      outputChannel.appendLine(`[Bridge][${ide.toUpperCase()}] ${agent} ← ${result.model} (${result.content.length} chars)`);
+      sendJson(res, 200, { ...result, ide });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      outputChannel.appendLine(`[Bridge][ERROR] ${agent}: ${msg}`);
+      outputChannel.appendLine(`[Bridge][ERROR][${ide.toUpperCase()}] ${agent}: ${msg}`);
       sendJson(res, 503, { error: msg, code: "COPILOT_ERROR" } as ErrorResponse);
     }
     return;
