@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "codevx": {
+      "type": "http",
+      "url": "http://localhost:8000/mcp",
+      "description": "CoDevx — 8-agent AI software development team. Submit tasks, monitor agents, retrieve history and logs.",
+      "headers": {}
+    }
+  }
+}

@@ -1721,6 +1721,110 @@ async def zeroclaw_webhook(request: Request) -> dict[str, str]:
         "message": "action must be one of: order | approve | reject",
     }
 
+
+
+# ============================================================
+# 10.5  MCP SERVER  (VS Code Copilot / Cursor / Antigravity)
+# ============================================================
+
+_MCP_TOOLS: list[dict] = [
+    {
+        "name": "codevx_submit_order",
+        "description": "Submit a task to the CoDevx 8-agent SDLC pipeline.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"task": {"type": "string", "description": "Feature to build"}},
+            "required": ["task"],
+        },
+    },
+    {"name": "codevx_get_state", "description": "Get all agent statuses.", "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "codevx_get_history", "description": "List completed tasks.", "inputSchema": {"type": "object", "properties": {}}},
+    {
+        "name": "codevx_get_logs",
+        "description": "Get recent pipeline logs.",
+        "inputSchema": {"type": "object", "properties": {"limit": {"type": "integer", "default": 50}}},
+    },
+    {
+        "name": "codevx_get_agent",
+        "description": "Get status of a specific agent by name.",
+        "inputSchema": {"type": "object", "properties": {"name": {"type": "string", "enum": ["Project Manager", "Architect", "Frontend Dev", "Backend Dev", "QA Engineer", "DevOps Engineer", "Security Analyst", "Database Engineer"]}}, "required": ["name"]},
+    },
+]
+
+_MCP_SERVER_INFO: dict = {
+    "protocolVersion": "2024-11-05",
+    "serverInfo": {"name": "codevx", "version": "5.0.0"},
+    "capabilities": {"tools": {}},
+}
+
+
+@app.get("/mcp")
+async def mcp_capabilities() -> dict:
+    return _MCP_SERVER_INFO
+
+
+@app.post("/mcp")
+async def mcp_dispatch(request: Request) -> dict:  # noqa: C901
+    body: dict = await request.json()
+    rpc_id = body.get("id")
+    method: str = body.get("method", "")
+    params: dict = body.get("params") or {}
+
+    def _ok(result: object) -> dict:
+        return {"jsonrpc": "2.0", "id": rpc_id, "result": result}
+
+    def _err(code: int, msg: str) -> dict:
+        return {"jsonrpc": "2.0", "id": rpc_id, "error": {"code": code, "message": msg}}
+
+    try:
+        if method == "initialize":
+            return _ok(_MCP_SERVER_INFO)
+
+        if method == "tools/list":
+            return _ok({"tools": _MCP_TOOLS})
+
+        if method == "tools/call":
+            tool: str = params.get("name", "")
+            args: dict = params.get("arguments") or {}
+
+            if tool == "codevx_submit_order":
+                task = str(args.get("task", "")).strip()
+                if not task:
+                    return _err(-32602, "task argument is required")
+                import uuid as _u; tid = str(_u.uuid4())[:8]
+                add_log(f"[MCP] Order via IDE task_id={tid}")
+                SYSTEM_STATE["current_task"] = task
+                asyncio.create_task(execute_pipeline(None, task))
+                return _ok({"content": [{"type": "text", "text": f"Order submitted tid={tid} -- Pipeline started"}]})
+
+            if tool == "codevx_get_state":
+                return _ok({"content": [{"type": "text", "text": json.dumps(SYSTEM_STATE, indent=2)}]})
+
+            if tool == "codevx_get_history":
+                return _ok({"content": [{"type": "text", "text": json.dumps(SYSTEM_STATE["history"], indent=2)}]})
+
+            if tool == "codevx_get_logs":
+                lim = max(1, min(int(args.get("limit", 50)), 200))
+                return _ok({"content": [{"type": "text", "text": chr(10).join(SYSTEM_STATE["logs"][-lim:])}]})
+
+            if tool == "codevx_get_agent":
+                nm = str(args.get("name", ""))
+                ag = SYSTEM_STATE["agents"].get(nm)
+                if not ag:
+                    return _err(-32602, f"Agent not found: {nm}")
+                return _ok({"content": [{"type": "text", "text": json.dumps({"name": nm, **ag}, indent=2)}]})
+
+            return _err(-32601, f"Unknown tool: {tool}")
+
+        if method == "ping":
+            return _ok({})
+
+        return _err(-32601, f"Unknown method: {method}")
+
+    except Exception as exc:
+        add_log(f"[MCP][ERROR] {exc}")
+        return _err(-32603, "Internal MCP server error")
+
 @app.get("/", response_class=HTMLResponse)
 async def serve_fallback() -> HTMLResponse:
     try:
@@ -1757,6 +1861,7 @@ if __name__ == "__main__":
     print("  Dev UI:     http://localhost:5173  (Vite)")
     print("  WA Webhook: POST http://localhost:8000/webhook/whatsapp")
     print("  ZC Webhook: POST http://localhost:8000/webhook/zeroclaw")
+    print("  MCP Server: http://localhost:8000/mcp")
     print("  API Docs:   http://localhost:8000/docs")
     print("=" * 60)
     print()

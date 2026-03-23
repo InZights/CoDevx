@@ -1,0 +1,91 @@
+---
+description: CoDevx — 8-agent AI dev team rules for Cursor AI
+globs: ["**/*.py", "**/*.ts", "**/*.tsx", "**/*.sql", "**/*.yml", "**/*.yaml"]
+alwaysApply: true
+---
+
+# CoDevx Project Rules
+
+## What this repo is
+
+CoDevx is an autonomous AI software development team running as a FastAPI backend (`agent_mesh.py`). It orchestrates 8 specialized agents through a full SDLC pipeline. The Cursor AI assistant should understand this architecture and help you interact with it.
+
+## MCP Server (use this to control the pipeline from Cursor)
+
+CoDevx exposes an MCP server at **`http://localhost:8000/mcp`** when the backend is running.
+
+Available tools:
+| Tool | Description |
+|------|-------------|
+| `codevx_submit_order` | Submit a task — triggers the full 8-agent pipeline |
+| `codevx_get_state` | Current agent statuses + active task |
+| `codevx_get_history` | Completed tasks with files, branch, PR |
+| `codevx_get_logs` | Recent activity logs |
+| `codevx_get_agent` | Status of a specific named agent |
+
+**Example:** To trigger the pipeline, ask Cursor: _"Use the CoDevx MCP tool to submit an order: build a Stripe billing integration"_
+
+## Architecture (read before editing)
+
+```
+agent_mesh.py       ← entire backend, ~1770 lines, intentionally single-file
+zeroclaw_squad.yaml ← team config, pipeline settings, storage
+command-center/     ← React 19 + TypeScript + Tailwind dashboard
+docs/               ← architecture docs, ZeroClaw examples
+```
+
+## Coding standards to enforce
+
+### Python (`agent_mesh.py`)
+- Full PEP 695 type hints everywhere — no untyped functions
+- `structlog` for all logging — no `print()` or `logging.info()`
+- Async/await throughout — no blocking I/O in async context
+- Parameterized SQL only — `db.execute("SELECT ... WHERE id = ?", (id,))`
+- HTTPException with sanitized messages — never expose stack traces
+- `asyncio.create_subprocess_exec()` for subprocesses — never `shell=True`
+
+### Frontend (`command-center/`)
+- Named exports only — no `export default`
+- Strict TypeScript — no `any`, no `@ts-ignore`
+- React Query (TanStack v5) for server state
+- Zod + React Hook Form for all forms
+- WCAG 2.1 AA — aria-labels on all interactive elements
+
+### Tests
+- ≥85% branch coverage on all new code
+- Mock ALL external I/O (`respx` for httpx, `moto` for S3, etc.)
+- `httpx.AsyncClient(app=app, base_url="http://test")` for FastAPI integration tests
+- At least 1 `hypothesis` property-based test for any data-processing logic
+
+### Security
+- Never hardcode secrets — env vars only
+- Rate-limit all auth endpoints (login / register / password-reset)
+- CORS: never `allow_origins=["*"]` in production
+- All file paths must be validated before use (no path traversal)
+
+## Section structure in agent_mesh.py (do not break this)
+
+```
+# 1. CONFIGURATION
+# 2. DATABASE (SQLite via aiosqlite)
+# 3. SHARED STATE
+# 4. HELPERS
+# 5. LLM ENGINE + AGENT_SYSTEM_PROMPTS + AGENT_TEMPERATURES
+#    5.5 AGENT MEMORY
+#    5.6 REAL TOOL EXECUTION
+#    5.7 TASK DECOMPOSITION
+# 6. GIT ENGINE
+# 7. WHATSAPP
+# 7.5 ZEROCLAW GATEWAY
+# 8. DISCORD BOT
+# 9. EXECUTION PIPELINE (execute_pipeline)
+# 10. MCP SERVER (IDE integration: VS Code, Cursor, Antigravity)
+# 11. FASTAPI APP + ROUTES
+# 12. ENTRY POINT
+```
+
+## After any edit to agent_mesh.py
+Run this to verify:
+```bash
+python -m py_compile agent_mesh.py && echo "✅ syntax OK"
+```
