@@ -1,6 +1,30 @@
-# CoDevx — Agent Mesh v4.0
+<div align="center">
 
-> **A production-grade, 8-agent AI software development team** that takes a plain-English task description and delivers a working, tested, and committed codebase — complete with architecture docs, frontend, backend, database migrations, test suites, security scan, CI/CD configuration, and a GitHub PR.
+```
+ ██████╗ ██████╗ ██████╗ ███████╗██╗   ██╗██╗  ██╗
+██╔════╝██╔═══██╗██╔══██╗██╔════╝██║   ██║╚██╗██╔╝
+██║     ██║   ██║██║  ██║█████╗  ██║   ██║ ╚███╔╝ 
+██║     ██║   ██║██║  ██║██╔══╝  ╚██╗ ██╔╝ ██╔██╗ 
+╚██████╗╚██████╔╝██████╔╝███████╗ ╚████╔╝ ██╔╝ ██╗
+ ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝  ╚═══╝  ╚═╝  ╚═╝
+```
+
+### Agent Mesh · v4.0
+
+**Your autonomous AI software development team.**  
+Speak a feature. Get a production-ready codebase.
+
+[![Python](https://img.shields.io/badge/Python-3.12-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.111-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
+[![LangGraph](https://img.shields.io/badge/LangGraph-0.2-FF6B35?style=flat-square)](https://langchain-ai.github.io/langgraph/)
+[![MCP](https://img.shields.io/badge/MCP-SSE-6366F1?style=flat-square)](https://modelcontextprotocol.io)
+[![License](https://img.shields.io/badge/License-MIT-22C55E?style=flat-square)](LICENSE)
+
+</div>
+
+---
+
+> CoDevx spins up **8 specialized AI agents** — PM, Architect, Database Engineer, Backend Dev, Frontend Dev, QA Engineer, Security Analyst, and DevOps Engineer — that collaborate sequentially on every task you submit. Hand it a plain-English description; get back architecture docs, migrations, API routes, UI components, test suites, a security audit, Docker + CI/CD config, and a GitHub PR. All automatically.
 
 ---
 
