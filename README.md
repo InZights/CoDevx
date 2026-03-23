@@ -1,4 +1,4 @@
-# AI Dev Team — Agent Mesh v4.0
+# CoDevx — Agent Mesh v4.0
 
 > **A production-grade, 8-agent AI software development team** that takes a plain-English task description and delivers a working, tested, and committed codebase — complete with architecture docs, frontend, backend, database migrations, test suites, security scan, CI/CD configuration, and a GitHub PR.
 
@@ -29,7 +29,7 @@
 
 ## What is this?
 
-**AI Dev Team** is an autonomous software development infrastructure powered by eight specialized AI agents collaborating through a structured SDLC (Software Development Life Cycle) pipeline.
+**CoDevx** is an autonomous software development infrastructure powered by eight specialized AI agents collaborating through a structured SDLC (Software Development Life Cycle) pipeline.
 
 You give it an order: _"Build a multi-tenant SaaS billing system with Stripe integration"_ via Discord, WhatsApp, Telegram, or any other messaging platform. The system:
 
@@ -170,8 +170,8 @@ d:\Projects\AI-DEV-TEAM\
 ### 1. Clone and configure
 
 ```bash
-git clone https://github.com/your-org/ai-dev-team.git
-cd ai-dev-team
+git clone https://github.com/InZights/CoDevx.git
+cd CoDevx
 cp .env.example .env
 # Edit .env — fill in at minimum OPENAI_API_KEY and one messaging provider
 ```
@@ -232,8 +232,8 @@ Services:
 ### Backend only
 
 ```bash
-docker build -t ai-dev-team-backend .
-docker run -p 8000:8000 --env-file .env ai-dev-team-backend
+docker build -t codevx-backend .
+docker run -p 8000:8000 --env-file .env codevx-backend
 ```
 
 ### Production considerations

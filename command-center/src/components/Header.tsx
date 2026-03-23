@@ -35,10 +35,10 @@ export function Header({ wsStatus }: HeaderProps) {
         </div>
         <div>
           <h1 className="text-base font-bold text-white tracking-wide leading-tight">
-            AI Dev Team
+            CoDevx
             <span className="text-blue-400 font-normal text-xs ml-1.5">Command Center</span>
-          </h1>
-          <p className="text-[11px] text-slate-500 leading-none mt-0.5">struktur.ai · Agent Mesh v2.0</p>
+          </p>
+          <p className="text-[11px] text-slate-500 leading-none mt-0.5">CoDevx · Agent Mesh v2.0</p>
         </div>
       </div>
 

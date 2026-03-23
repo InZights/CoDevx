@@ -1,8 +1,8 @@
-# AI Dev Team — System Architecture
+# CoDevx — System Architecture
 
 ## Overview
 
-AI Dev Team v4.0 is a **multi-process, event-driven system** composed of:
+CoDevx v4.0 is a **multi-process, event-driven system** composed of:
 
 1. **`agent_mesh.py`** — FastAPI backend (Python 3.12, async)
 2. **`command-center/`** — React 19 PWA (TypeScript, Tailwind, Vite)
