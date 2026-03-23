@@ -50,49 +50,46 @@ All of this happens autonomously. You only approve the architecture plan before 
 
 ## How it works
 
-```
-You (Discord/WhatsApp/Telegram)
-        │
-        │  "order build a SaaS billing system"
-        ▼
-┌──────────────────┐    HMAC-SHA256    ┌────────────────────┐
-│  Messaging Layer │ ──────────────── ▶│  agent_mesh.py     │
-│  (ZeroClaw /     │   webhook POST    │  FastAPI + SQLite  │
-│   Discord Bot /  │                   │  WebSocket state   │
-│   Twilio WA)     │ ◀─────────────── │  Real-time logs    │
-└──────────────────┘   reply_url       └────────────────────┘
-                                                │
-                          ┌─────────────────────┘
-                          │  8-Agent SDLC Pipeline
-                          ▼
-                    Architect ──────────────────────────────────────┐
-                          │  design doc + phase decomposition       │
-                          ▼                                         │
-              [Phase 1..N] ──────────────────────────────────┐     │
-              Frontend Dev │ Backend Dev  (parallel)          │     │
-              Database Engineer                               │     │
-                          │  writes files + runs real tools   │     │
-                          ▼                                   │     │
-                     QA Engineer  ──────────────────────┐    │     │
-                     pytest + vitest + retry loop        │    │     │
-                          │                              │    │     │
-                          ▼                              │    │     │
-                Security Analyst ───────────────┐        │    │     │
-                bandit + npm audit + fix loop   │        │    │     │
-                          │                     │        │    │     │
-                          ▼                     │        │    │     │
-                  DevOps Engineer               │        │    │     │
-                  CI/CD + Docker build          │        │    │     │
-                          │                     │        │    │     │
-                          ▼                     │        │    │     │
-                  Git commit + GitHub PR ◀──────┘        │    │     │
-                          │                              │    │     │
-                          ▼                              │    │     │
-                 Project Manager ◀──────────────────────┘    │     │
-                 Delivery report + memory store ◀────────────┘     │
-                          │                                         │
-                          └─────────────────────────────────────────┘
-                          Sends report back to you
+```mermaid
+flowchart TD
+    User(["👤 You\n(Discord / WhatsApp / Telegram)"])
+    ML["🌐 Messaging Layer\nZeroClaw / Discord Bot / Twilio WA"]
+    AM["⚙️ agent_mesh.py\nFastAPI · SQLite · WebSocket"]
+
+    User -->|"order: build a SaaS billing system"| ML
+    ML -->|"webhook POST · HMAC-SHA256"| AM
+    AM -->|"reply_url callback"| ML
+    ML -->|"Delivery report"| User
+
+    AM --> Arch
+
+    subgraph Pipeline ["8-Agent SDLC Pipeline"]
+        direction TB
+        Arch["🟣 Architect\nADR · API contracts · phase decomposition"]
+
+        subgraph Parallel ["Phase 1..N  (parallel)"]
+            direction LR
+            FE["🔵 Frontend Dev\nNext.js · TypeScript · Tailwind"]
+            BE["🟢 Backend Dev\nFastAPI · Python 3.12 · SQLAlchemy"]
+            DB["⚫ Database Engineer\nPostgreSQL · Alembic · Redis"]
+        end
+
+        QA["🟡 QA Engineer\npytest · Vitest · hypothesis\ncoverage gate ≥ 85%"]
+        Sec["🔴 Security Analyst\nbandit · npm audit · OWASP ASVS\nauto-patch loop"]
+        DevOps["🟠 DevOps Engineer\nDocker · GitHub Actions · K8s manifests"]
+        Git["📦 Git commit + GitHub PR\nfeat/xxxx branch · auto-push"]
+        PM["🔵 Project Manager\nDelivery report · memory store"]
+    end
+
+    Arch -->|"design doc"| Parallel
+    Parallel --> QA
+    QA -->|"retry on failure"| QA
+    QA --> Sec
+    Sec -->|"fix loop"| Sec
+    Sec --> DevOps
+    DevOps --> Git
+    Git --> PM
+    PM -->|"report"| AM
 ```
 
 ---
