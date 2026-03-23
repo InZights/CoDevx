@@ -54,10 +54,36 @@ TWILIO_AUTH_TOKEN  = os.getenv("TWILIO_AUTH_TOKEN", "")
 TWILIO_WA_FROM     = os.getenv("TWILIO_WHATSAPP_FROM", "whatsapp:+14155238886")
 MANAGER_WHATSAPP   = os.getenv("MANAGER_WHATSAPP", "")  # e.g. whatsapp:+60123456789
 
-# LLM (OpenAI or any OpenAI-compatible endpoint)
-OPENAI_API_KEY  = os.getenv("OPENAI_API_KEY", "")
-OPENAI_MODEL    = os.getenv("OPENAI_MODEL", "gpt-4o")
-OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "")  # blank = official OpenAI
+# ── LLM Brain ─────────────────────────────────────────────────────────────────
+# LLM_MODEL is the single knob to switch your agents' brain.
+# LiteLLM routes to the right provider automatically based on the model prefix.
+#
+#  Provider        LLM_MODEL examples                       Required key
+#  OpenAI          gpt-4o, gpt-4.1, o3-mini                 OPENAI_API_KEY
+#  Anthropic       claude-opus-4, claude-sonnet-4            ANTHROPIC_API_KEY
+#  Google Gemini   gemini/gemini-2.5-pro, gemini/gemini-3-flash  GOOGLE_API_KEY
+#  Groq            groq/llama-3.3-70b, groq/mixtral-8x7b    GROQ_API_KEY
+#  Mistral         mistral/mistral-large, mistral/codestral  MISTRAL_API_KEY
+#  Ollama (local)  ollama/llama3.3, ollama/qwen2.5-coder     (no key needed)
+#  Together AI     together_ai/meta-llama/Llama-3-70b        TOGETHERAI_API_KEY
+#  AWS Bedrock     bedrock/anthropic.claude-3-5-sonnet       BEDROCK creds below
+#  Custom OpenAI   openai/<model-name>                       + OPENAI_BASE_URL
+LLM_MODEL       = os.getenv("LLM_MODEL", "gpt-4o")          # e.g. claude-opus-4 / gemini/gemini-2.5-pro
+OPENAI_API_KEY  = os.getenv("OPENAI_API_KEY", "")           # OpenAI / Azure / OpenAI-compatible
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "")          # optional: override API endpoint
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")      # Anthropic Claude
+GOOGLE_API_KEY    = os.getenv("GOOGLE_API_KEY", "")         # Google Gemini / Vertex
+GOOGLE_PROJECT    = os.getenv("GOOGLE_PROJECT", "")         # Vertex AI project (optional)
+GROQ_API_KEY      = os.getenv("GROQ_API_KEY", "")           # Groq
+MISTRAL_API_KEY   = os.getenv("MISTRAL_API_KEY", "")        # Mistral AI
+TOGETHERAI_API_KEY = os.getenv("TOGETHERAI_API_KEY", "")    # Together AI
+OLLAMA_HOST       = os.getenv("OLLAMA_HOST", "http://localhost:11434")  # Ollama
+AWS_ACCESS_KEY_ID     = os.getenv("AWS_ACCESS_KEY_ID", "")  # AWS Bedrock
+AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY", "")
+AWS_REGION_NAME       = os.getenv("AWS_REGION_NAME", "us-east-1")
+
+# Legacy: OPENAI_MODEL used as fallback if LLM_MODEL is not set
+OPENAI_MODEL    = os.getenv("OPENAI_MODEL", LLM_MODEL)
 
 # Git
 GIT_WORKSPACE = Path(os.getenv("GIT_WORKSPACE", "./workspace"))
@@ -86,10 +112,10 @@ COPILOT_BRIDGE_URL = os.getenv("COPILOT_BRIDGE_URL", "http://localhost:8001")  #
 # Set IDE_TOOLS_ENABLED=true and at least one IDE source to activate.
 IDE_TOOLS_ENABLED   = os.getenv("IDE_TOOLS_ENABLED", "false").lower() == "true"
 IDE_CHATBOT         = os.getenv("IDE_CHATBOT", "copilot")  # copilot | cursor | antigravity | all
-# Google Antigravity / Gemini Code Assist (OpenAI-compatible endpoint)
-ANTIGRAVITY_API_URL = os.getenv("ANTIGRAVITY_API_URL", "")   # e.g. https://generativelanguage.googleapis.com/v1beta/openai
-ANTIGRAVITY_API_KEY = os.getenv("ANTIGRAVITY_API_KEY", "")   # Google Cloud / AI Studio API key
-ANTIGRAVITY_MODEL   = os.getenv("ANTIGRAVITY_MODEL", "gemini-2.0-flash")  # or gemini-2.5-pro, etc.
+# Antigravity IDE -- the Google AI IDE connects to CoDevx via MCP (see antigravity_mcp_config.json).
+# For "consult Antigravity" in IDE_TOOLS, we call Google Gemini directly (what Antigravity runs).
+# Set GOOGLE_API_KEY above and use IDE_CHATBOT=antigravity to send hints to Gemini during pipeline.
+ANTIGRAVITY_MODEL = os.getenv("ANTIGRAVITY_MODEL", "gemini/gemini-2.5-pro")  # Gemini model for IDE tool consultation
 
 MAX_RETRIES       = int(os.getenv("MAX_RETRIES", "2"))             # QA / Security retry attempts
 MAX_SUBTASKS      = int(os.getenv("MAX_SUBTASKS", "5"))            # max implementation phases
@@ -555,20 +581,19 @@ AGENT_TEMPERATURES: dict[str, float] = {
 }
 
 
-# Shared OpenAI client — created once, reused across all agent calls
-_openai_client: Any = None
-
-
-def _get_openai_client() -> Any:
-    """Return a lazily-initialized shared AsyncOpenAI client."""
-    global _openai_client
-    if _openai_client is None:
-        from openai import AsyncOpenAI
-        kwargs: dict[str, Any] = {"api_key": OPENAI_API_KEY}
-        if OPENAI_BASE_URL:
-            kwargs["base_url"] = OPENAI_BASE_URL
-        _openai_client = AsyncOpenAI(**kwargs)
-    return _openai_client
+def _has_any_llm_key() -> bool:
+    """Return True if at least one LLM provider API key is configured."""
+    return bool(
+        OPENAI_API_KEY
+        or ANTHROPIC_API_KEY
+        or GOOGLE_API_KEY
+        or GROQ_API_KEY
+        or MISTRAL_API_KEY
+        or TOGETHERAI_API_KEY
+        or AWS_ACCESS_KEY_ID
+        or LLM_MODEL.startswith("ollama/")   # Ollama is keyless
+        or LLM_PROVIDER in ("copilot", "cursor")
+    )
 
 
 async def _call_copilot_bridge(agent: str, system: str, user: str, temperature: float) -> str:
@@ -593,17 +618,22 @@ async def _call_copilot_bridge(agent: str, system: str, user: str, temperature: 
 
 async def llm_call(agent: str, user_message: str, *, temperature: float | None = None) -> str:
     """
-    Call the configured LLM for the given agent.
+    Call the configured LLM for the given agent using LiteLLM.
 
-    LLM_PROVIDER controls the backend:
-      openai   -- OpenAI / Azure / any compatible endpoint (default)
-      copilot  -- GitHub Copilot via codevx-vscode-bridge extension (:8001)
-      cursor   -- alias for copilot (same HTTP bridge protocol)
-      simulate -- always simulate regardless of API keys
+    LiteLLM routes to the correct provider based on LLM_MODEL prefix:
+      gpt-4o                    -> OpenAI (OPENAI_API_KEY)
+      claude-opus-4             -> Anthropic (ANTHROPIC_API_KEY)
+      gemini/gemini-2.5-pro     -> Google Gemini (GOOGLE_API_KEY)
+      groq/llama-3.3-70b        -> Groq (GROQ_API_KEY)
+      mistral/mistral-large     -> Mistral (MISTRAL_API_KEY)
+      ollama/llama3.3           -> Ollama local (OLLAMA_HOST, no key)
+      bedrock/claude-3-5-sonnet -> AWS Bedrock (AWS_* vars)
+      openai/<model>            -> any OpenAI-compatible endpoint (OPENAI_BASE_URL)
 
-    Falls back to OpenAI if Copilot bridge is unreachable,
-    then to simulation if OPENAI_API_KEY is also unset.
+    LLM_PROVIDER=copilot|cursor -> routes through VS Code bridge first.
+    LLM_PROVIDER=simulate      -> returns placeholder, no LLM call.
     """
+    import os as _os
     temp = temperature if temperature is not None else AGENT_TEMPERATURES.get(agent, 0.2)
     system_prompt = AGENT_SYSTEM_PROMPTS.get(agent, "You are a helpful AI.")
 
@@ -613,12 +643,11 @@ async def llm_call(agent: str, user_message: str, *, temperature: float | None =
         result = await _call_copilot_bridge(agent, system_prompt, user_message, temp)
         if result:
             return result
-        # Bridge failed -- try OpenAI if available
-        add_log(f"[{agent}] Copilot bridge unreachable, trying OpenAI fallback...")
+        add_log(f"[{agent}] Copilot bridge unreachable, falling back to {LLM_MODEL}...")
 
-    # ── Simulation ───────────────────────────────────────────────────────────
-    if LLM_PROVIDER == "simulate" or not OPENAI_API_KEY:
-        add_log(f"[{agent}] Simulating (LLM_PROVIDER={LLM_PROVIDER}, no OPENAI_API_KEY).")
+    # ── Simulation ──────────────────────────────────────────────────────────
+    if LLM_PROVIDER == "simulate" or not _has_any_llm_key():
+        add_log(f"[{agent}] Simulating ({LLM_MODEL} / no valid API key configured).")
         await asyncio.sleep(0.2)
         slug = agent.lower().replace(" ", "_")
         return (
@@ -628,22 +657,43 @@ async def llm_call(agent: str, user_message: str, *, temperature: float | None =
             f"def placeholder(): pass\n"
         )
 
-    # ── OpenAI (default) ─────────────────────────────────────────────────────
+    # ── LiteLLM universal call ───────────────────────────────────────────────
     try:
-        client = _get_openai_client()
-        add_log(f"[{agent}] -> {OPENAI_MODEL} (temp={temp})")
-        resp = await client.chat.completions.create(
-            model=OPENAI_MODEL,
+        import litellm  # type: ignore
+        litellm.drop_params = True          # silently ignore unsupported params
+        litellm.set_verbose = False
+
+        # Inject per-provider env vars that LiteLLM expects
+        if GOOGLE_API_KEY:
+            _os.environ.setdefault("GEMINI_API_KEY", GOOGLE_API_KEY)
+        if OLLAMA_HOST:
+            _os.environ.setdefault("OLLAMA_API_BASE", OLLAMA_HOST)
+
+        # Extra kwargs for OpenAI-compatible custom endpoints
+        extra: dict[str, Any] = {}
+        if OPENAI_BASE_URL and (LLM_MODEL.startswith("openai/") or not any(
+            LLM_MODEL.startswith(p)
+            for p in ("claude", "gemini/", "groq/", "mistral/", "ollama/",
+                      "together_ai/", "bedrock/", "anthropic.")
+        )):
+            extra["api_base"] = OPENAI_BASE_URL
+
+        add_log(f"[{agent}] -> {LLM_MODEL} (temp={temp:.2f})")
+        resp = await litellm.acompletion(
+            model=LLM_MODEL,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user",   "content": user_message},
             ],
             max_tokens=OPENAI_MAX_TOKENS,
             temperature=temp,
+            **extra,
         )
-        return resp.choices[0].message.content or ""
+        content = resp.choices[0].message.content or ""
+        add_log(f"[{agent}] <- {LLM_MODEL} ({len(content)} chars)")
+        return content
     except Exception as exc:
-        add_log(f"[{agent}] LLM error: {exc}")
+        add_log(f"[{agent}] LLM error ({LLM_MODEL}): {exc}")
         return f"[LLM ERROR] {exc}"
 
 def parse_files_from_llm(output: str) -> list[dict]:
@@ -1316,27 +1366,29 @@ async def consult_ide_chatbot(
                 add_log(f"[{agent}] [{_ide.title()}] bridge unreachable: {exc}")
 
         elif _ide == "antigravity":
-            # Google Antigravity / Gemini Code Assist (OpenAI-compatible REST)
-            if not ANTIGRAVITY_API_KEY or not ANTIGRAVITY_API_URL:
+            # Antigravity is a Google MCP IDE -- it connects TO CoDevx, not the reverse.
+            # To "consult Antigravity's AI" we call Google Gemini directly via LiteLLM
+            # (same frontier models Antigravity runs internally: Gemini 3.1 Pro etc.)
+            if not GOOGLE_API_KEY:
                 add_log(
-                    f"[{agent}] [Antigravity] skipped -- "
-                    "ANTIGRAVITY_API_URL and ANTIGRAVITY_API_KEY required"
+                    f"[{agent}] [Antigravity/Gemini] skipped -- "
+                    "GOOGLE_API_KEY required (set it in .env)"
                 )
                 continue
+            import os as _osa
+            _osa.environ.setdefault("GEMINI_API_KEY", GOOGLE_API_KEY)
             try:
-                from openai import AsyncOpenAI as _AGClient
-                ag = _AGClient(
-                    api_key=ANTIGRAVITY_API_KEY,
-                    base_url=ANTIGRAVITY_API_URL,
-                )
-                ag_resp = await ag.chat.completions.create(
-                    model=ANTIGRAVITY_MODEL,
+                import litellm as _ll  # type: ignore
+                _ll.drop_params = True
+                ag_resp = await _ll.acompletion(
+                    model=ANTIGRAVITY_MODEL,  # e.g. gemini/gemini-2.5-pro
                     messages=[
                         {
                             "role": "system",
                             "content": (
-                                "You are Google Antigravity, an AI coding assistant. "
-                                f"Provide concise, actionable {topic}."
+                                "You are a Google Gemini AI assistant (the model powering "
+                                "Google Antigravity IDE). Provide concise, actionable "
+                                f"{topic}."
                             ),
                         },
                         {"role": "user", "content": context[:3000]},
@@ -1346,10 +1398,10 @@ async def consult_ide_chatbot(
                 )
                 result = ag_resp.choices[0].message.content or ""
                 if result:
-                    parts.append(f"### Antigravity says:\n{result}")
-                    add_log(f"[{agent}] [Antigravity] {topic}: {result[:80]}")
+                    parts.append(f"### Antigravity (Gemini) says:\n{result}")
+                    add_log(f"[{agent}] [Antigravity/Gemini] {topic}: {result[:80]}")
             except Exception as exc:
-                add_log(f"[{agent}] [Antigravity] error: {exc}")
+                add_log(f"[{agent}] [Antigravity/Gemini] error: {exc}")
 
     return "\n\n".join(parts)
 

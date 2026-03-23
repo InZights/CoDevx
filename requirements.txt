@@ -11,3 +11,8 @@ aiosqlite==0.20.0
 openai==1.68.2
 twilio==9.5.0
 httpx==0.28.1
+
+# --- v5.1: Universal multi-provider LLM routing ---
+# LiteLLM routes to 100+ providers (OpenAI, Anthropic, Gemini, Groq, Mistral,
+# Ollama, Bedrock, Together AI, etc.) with a single unified interface.
+litellm>=1.40.0

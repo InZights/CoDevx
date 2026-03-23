@@ -256,13 +256,22 @@ In Cursor Composer or Chat:
 
 ### Google Antigravity
 
-Antigravity reads `AGENTS.md` and `.mcp.json` to discover agents and tools. Start CoDevx, then point Antigravity at `http://localhost:8000/mcp`.
+Antigravity is a standalone AI IDE (desktop app) that supports MCP servers. Connect CoDevx to Antigravity in two steps:
+
+1. Open Antigravity → `...` menu in the side panel → **Manage MCP Servers** → **View raw config**
+2. Paste the contents of `antigravity_mcp_config.json` into the config editor and save.
+
+Antigravity will then have access to all CoDevx MCP tools (`codevx_submit_order`, `codevx_get_state`, etc.) directly from its Agent panel:
+> _“Use codevx_submit_order to build a real-time collaborative whiteboard”_
+
+Antigravity runs **Gemini 3.1 Pro, Claude Sonnet 4.6, GPT-OSS-120b** as its reasoning models. If you set `IDE_CHATBOT=antigravity` and `GOOGLE_API_KEY`, CoDevx agents will additionally consult Gemini (the same model Antigravity uses) at key pipeline stages.
 
 ### IDE integration files at a glance
 
 | File | Read by | Purpose |
 |------|---------|--------|
-| `.mcp.json` | Cursor, Antigravity | MCP server discovery |
+| `.mcp.json` | Cursor | MCP server auto-discovery |
+| `antigravity_mcp_config.json` | **Google Antigravity** | Paste into Antigravity → Manage MCP Servers → View raw config |
 | `.github/copilot-instructions.md` | VS Code Copilot | Workspace instructions + code standards |
 | `.cursor/rules/codevx.mdc` | Cursor AI | Project rules (`alwaysApply: true`) |
 | `AGENTS.md` | All AI-native IDEs | Universal agent manifest |
@@ -330,12 +339,11 @@ CoDevx has **two distinct IDE integration modes** that work independently or tog
    COPILOT_BRIDGE_URL=http://localhost:8001
    ```
 
-   For Google Antigravity (Gemini Code Assist), also add:
+   For **Google Antigravity** consultation (agents call Gemini \u2014 the models Antigravity uses internally):
    ```env
-   IDE_CHATBOT=antigravity
-   ANTIGRAVITY_API_URL=https://generativelanguage.googleapis.com/v1beta/openai
-   ANTIGRAVITY_API_KEY=your_google_api_key
-   ANTIGRAVITY_MODEL=gemini-2.0-flash
+   IDE_CHATBOT=antigravity      # or "all" to consult all three IDEs
+   GOOGLE_API_KEY=AIza...       # same key used for Gemini brain if LLM_MODEL=gemini/*
+   ANTIGRAVITY_MODEL=gemini/gemini-2.5-pro
    ```
 
 4. **Restart CoDevx** — agents now consult the IDE chatbot at each key pipeline stage.
@@ -480,24 +488,50 @@ zeroclaw daemon
 
 ## LLM Configuration
 
-The pipeline uses the **OpenAI API** (or any compatible endpoint). Without an API key, all agents run in **simulation mode** — generating placeholder files so the full pipeline can be tested.
+CoDevx uses **[LiteLLM](https://github.com/BerriAI/litellm)** as a universal LLM router. Set `LLM_MODEL` in `.env` and CoDevx automatically routes to the right provider — no code changes needed.
 
 ```env
-OPENAI_API_KEY=sk-...           # Required for real code generation
-OPENAI_MODEL=gpt-4o             # Default model
-OPENAI_MAX_TOKENS=4000          # Tokens per agent call
+# The single knob to switch your agents' brain:
+LLM_MODEL=gpt-4o               # ← change this to any model below
 ```
 
-### Compatible endpoints (set OPENAI_BASE_URL)
+### Supported providers
 
-| Provider | OPENAI_BASE_URL |
-|----------|----------------|
-| OpenAI (default) | _(leave unset)_ |
-| Azure OpenAI | `https://<resource>.openai.azure.com/openai/deployments/<deployment>` |
-| Ollama (local) | `http://localhost:11434/v1` |
-| Groq | `https://api.groq.com/openai/v1` |
-| Mistral | `https://api.mistral.ai/v1` |
-| Any OpenAI-compatible | your endpoint |
+| Provider | `LLM_MODEL` example | Key variable |
+|----------|--------------------|--------------|
+| **OpenAI** | `gpt-4o` `gpt-4.1` `o3-mini` | `OPENAI_API_KEY` |
+| **Anthropic Claude** | `claude-opus-4` `claude-sonnet-4` `claude-haiku-3-5` | `ANTHROPIC_API_KEY` |
+| **Google Gemini** | `gemini/gemini-2.5-pro` `gemini/gemini-3-flash` | `GOOGLE_API_KEY` |
+| **Groq** _(fast)_ | `groq/llama-3.3-70b` `groq/mixtral-8x7b` | `GROQ_API_KEY` |
+| **Mistral AI** | `mistral/mistral-large` `mistral/codestral` | `MISTRAL_API_KEY` |
+| **Together AI** | `together_ai/meta-llama/Llama-3-70b-Instruct` | `TOGETHERAI_API_KEY` |
+| **Ollama** _(local, free)_ | `ollama/llama3.3` `ollama/qwen2.5-coder:32b` | none (just `ollama serve`) |
+| **LM Studio** _(local, free)_ | `openai/local-model` + `OPENAI_BASE_URL` | none |
+| **AWS Bedrock** | `bedrock/anthropic.claude-3-5-sonnet-20241022` | `AWS_*` vars |
+| **Azure OpenAI** | `azure/<deployment>` + `OPENAI_BASE_URL` | `OPENAI_API_KEY` |
+| **Any OpenAI-compatible** | `openai/<model>` + `OPENAI_BASE_URL` | `OPENAI_API_KEY` |
+
+### Quick switch examples
+
+```env
+# Switch to Claude Opus 4 (Anthropic)
+LLM_MODEL=claude-opus-4
+ANTHROPIC_API_KEY=sk-ant-...
+
+# Switch to Gemini 2.5 Pro (Google)
+LLM_MODEL=gemini/gemini-2.5-pro
+GOOGLE_API_KEY=AIza...
+
+# Switch to Llama 3.3 on Groq (fastest inference)
+LLM_MODEL=groq/llama-3.3-70b
+GROQ_API_KEY=gsk_...
+
+# Run fully local with Ollama (no API key, no cost)
+LLM_MODEL=ollama/qwen2.5-coder:32b
+OLLAMA_HOST=http://localhost:11434
+```
+
+No API key configured? The pipeline runs in **simulation mode** — all pipeline stages execute and files are generated with placeholder content, so you can test the full SDLC flow without spending tokens.
 
 ---
 
@@ -510,9 +544,15 @@ Copy `.env.example` to `.env` and configure:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MESSAGING_PROVIDER` | `discord` | `discord` \| `whatsapp` \| `both` \| `zeroclaw` |
-| `OPENAI_API_KEY` | — | OpenAI API key (omit = simulation mode) |
-| `OPENAI_MODEL` | `gpt-4o` | Model name |
-| `OPENAI_BASE_URL` | — | Override for Azure / Ollama / Groq |
+| `LLM_MODEL` | `gpt-4o` | The agents' LLM brain — any LiteLLM-supported model string |
+| `OPENAI_API_KEY` | — | OpenAI API key (or Azure / OpenAI-compatible) |
+| `ANTHROPIC_API_KEY` | — | Anthropic Claude API key |
+| `GOOGLE_API_KEY` | — | Google Gemini API key (also used for Antigravity IDE consultation) |
+| `GROQ_API_KEY` | — | Groq API key |
+| `MISTRAL_API_KEY` | — | Mistral AI API key |
+| `TOGETHERAI_API_KEY` | — | Together AI API key |
+| `OLLAMA_HOST` | `http://localhost:11434` | Ollama server URL for local models |
+| `OPENAI_BASE_URL` | — | Override for Azure / LM Studio / any OpenAI-compatible endpoint |
 | `DB_PATH` | `./agent_mesh.db` | SQLite database path |
 | `GIT_WORKSPACE` | `./workspace` | Directory agents write code to |
 
@@ -557,13 +597,11 @@ Copy `.env.example` to `.env` and configure:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MCP_ENABLED` | `true` | Enable `/mcp` endpoint for IDE integration |
-| `LLM_PROVIDER` | `openai` | `openai` \| `copilot` \| `cursor` \| `simulate` — which LLM engine agents use as their brain |
-| `COPILOT_BRIDGE_URL` | `http://localhost:8001` | URL of the codevx-vscode-bridge extension (used by `copilot`/`cursor` provider and IDE tools) |
-| `IDE_TOOLS_ENABLED` | `false` | Agents consult IDE chatbots as supplementary tools during pipeline |
-| `IDE_CHATBOT` | `copilot` | `copilot` \| `cursor` \| `antigravity` \| `all` — which chatbot(s) agents consult |
-| `ANTIGRAVITY_API_URL` | — | Google Antigravity / Gemini Code Assist OpenAI-compatible endpoint |
-| `ANTIGRAVITY_API_KEY` | — | Google API key for Antigravity |
-| `ANTIGRAVITY_MODEL` | `gemini-2.0-flash` | Antigravity model to use |
+| `LLM_PROVIDER` | `openai` | `openai` \| `copilot` \| `cursor` \| `simulate` — used to route brain through VS Code Copilot |
+| `COPILOT_BRIDGE_URL` | `http://localhost:8001` | URL of the codevx-vscode-bridge extension |
+| `IDE_TOOLS_ENABLED` | `false` | Agents consult IDE chatbots as supplementary tools |
+| `IDE_CHATBOT` | `copilot` | `copilot` \| `cursor` \| `antigravity` \| `all` — which chatbot(s) to consult |
+| `ANTIGRAVITY_MODEL` | `gemini/gemini-2.5-pro` | Gemini model used when consulting Antigravity (via `GOOGLE_API_KEY`) |
 
 ### Pipeline Tuning (v4.0)
 
