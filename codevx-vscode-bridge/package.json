@@ -1,0 +1,64 @@
+{
+  "name": "codevx-vscode-bridge",
+  "displayName": "CoDevx Copilot Bridge",
+  "description": "Bridges CoDevx agent LLM calls to GitHub Copilot via the VS Code Language Model API",
+  "version": "1.0.0",
+  "publisher": "codevx",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": ["AI", "Other"],
+  "keywords": ["codevx", "copilot", "agent", "bridge", "mcp"],
+  "icon": "media/icon.png",
+  "activationEvents": ["onStartupFinished"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "codevx-bridge.start",
+        "title": "CoDevx: Start Copilot Bridge Server"
+      },
+      {
+        "command": "codevx-bridge.stop",
+        "title": "CoDevx: Stop Copilot Bridge Server"
+      },
+      {
+        "command": "codevx-bridge.status",
+        "title": "CoDevx: Show Bridge Status"
+      }
+    ],
+    "configuration": {
+      "title": "CoDevx Copilot Bridge",
+      "properties": {
+        "codevxBridge.port": {
+          "type": "number",
+          "default": 8001,
+          "description": "Local port for the Copilot bridge HTTP server (set COPILOT_BRIDGE_URL=http://localhost:<port> in agent_mesh .env)"
+        },
+        "codevxBridge.model": {
+          "type": "string",
+          "default": "gpt-4o",
+          "enum": ["gpt-4o", "gpt-4o-mini", "claude-3.5-sonnet", "o1", "o3-mini"],
+          "description": "Preferred Copilot model family to use for agent calls"
+        },
+        "codevxBridge.autoStart": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically start the bridge server when VS Code opens this workspace"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -p ./ --watch",
+    "lint": "eslint src --ext ts",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.4.0"
+  }
+}

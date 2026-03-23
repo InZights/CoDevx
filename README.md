@@ -13,6 +13,7 @@
 5. [Prerequisites](#prerequisites)
 6. [Quick Start (local dev)](#quick-start-local-dev)
 7. [IDE Integration (VS Code · Cursor · Antigravity)](#ide-integration-vs-code--cursor--antigravity)
+   - [Copilot Bridge — agents USE Copilot](#copilot-bridge--agents-use-copilot)
 8. [Docker Deployment](#docker-deployment)
 9. [Messaging Provider Setup](#messaging-provider-setup)
    - [Discord](#discord)
@@ -268,6 +269,64 @@ Antigravity reads `AGENTS.md` and `.mcp.json` to discover agents and tools. Star
 
 ---
 
+### Copilot Bridge — agents USE Copilot
+
+The MCP integration above is **IDE → CoDevx** (you invoke the pipeline from chat). The **Copilot Bridge** goes the other direction: **CoDevx's 8 agents call GitHub Copilot** as their LLM engine, so every agent prompt, code-generation, and review flows through your Copilot subscription rather than OpenAI directly.
+
+```
+agent_mesh.py
+  └─ _call_copilot_bridge()  ─HTTP POST─▶  codevx-vscode-bridge
+                                              └─ vscode.lm API
+                                                   └─ GitHub Copilot (gpt-4o)
+```
+
+**Setup (5 minutes):**
+
+1. **Install the bridge extension** from the `codevx-vscode-bridge/` folder:
+   ```bash
+   cd codevx-vscode-bridge
+   npm install
+   npm run compile
+   # --- then press F5 in VS Code to run the extension, or package it:
+   npx vsce package
+   code --install-extension codevx-vscode-bridge-1.0.0.vsix
+   ```
+
+2. **Verify the bridge is alive** — a `CoDevx Bridge ●` item appears in the VS Code status bar. You can also run:
+   ```bash
+   curl http://localhost:8001/health
+   # → {"status":"ok","models":[{"id":"copilot/gpt-4o",...}]}
+   ```
+
+3. **Switch CoDevx to Copilot provider** in your `.env`:
+   ```env
+   LLM_PROVIDER=copilot
+   COPILOT_BRIDGE_URL=http://localhost:8001
+   ```
+
+4. **Restart CoDevx** — all 8 agents now use Copilot.
+
+**How it works:**
+
+| Setting | Effect |
+|---------|--------|
+| `LLM_PROVIDER=openai` | Default — calls OpenAI API directly |
+| `LLM_PROVIDER=copilot` | Routes every agent prompt through `vscode.lm` (Copilot) |
+| `LLM_PROVIDER=cursor` | Same bridge protocol, routes through Cursor AI models |
+| `LLM_PROVIDER=simulate` | No LLM calls at all — useful for pipeline/CI testing |
+
+If the bridge is unreachable, CoDevx gracefully falls back to OpenAI (if `OPENAI_API_KEY` is set) and then to simulation — no crash, no user action needed.
+
+**Bridge HTTP API** (used internally by `agent_mesh.py`):
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Bridge status + available models |
+| `/models` | GET | All Copilot models detected by `vscode.lm` |
+| `/chat` | POST | `{agent, system, user, model?}` → `{content, model, vendor}` |
+
+---
+
 ## Docker Deployment
 
 ### Full stack (recommended)
@@ -465,6 +524,8 @@ Copy `.env.example` to `.env` and configure:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `MCP_ENABLED` | `true` | Enable `/mcp` endpoint for IDE integration |
+| `LLM_PROVIDER` | `openai` | `openai` \| `copilot` \| `cursor` \| `simulate` — which LLM engine agents use |
+| `COPILOT_BRIDGE_URL` | `http://localhost:8001` | URL of the codevx-vscode-bridge extension (only for `copilot`/`cursor`) |
 
 ### Pipeline Tuning (v4.0)
 
