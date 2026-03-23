@@ -278,44 +278,43 @@ Antigravity runs **Gemini 3.1 Pro, Claude Sonnet 4.6, GPT-OSS-120b** as its reas
 
 ---
 
-### IDE Chatbot Tools — agents consult Copilot, Cursor, Antigravity
+### IDE Integration — Use CoDevx from VS Code, Cursor, or Antigravity
 
-CoDevx has **two distinct IDE integration modes** that work independently or together:
-
-| Mode | Direction | What it does |
-|------|-----------|-------------|
-| **MCP server** | IDE → CoDevx | You invoke the 8-agent pipeline from your IDE chat |
-| **LLM_PROVIDER=copilot** | CoDevx → Copilot | Copilot *replaces* OpenAI as the agents' brain |
-| **IDE_TOOLS_ENABLED=true** | CoDevx ↔ IDE | Agents *consult* Copilot/Cursor/Antigravity as specialist tools during pipeline work, while keeping their configured LLM brain |
-
-**The IDE Chatbot Tools mode** is what lets the agents actively use and interact with the chatbots in the three IDEs:
+CoDevx is IDE-agnostic. Whether your team works in **VS Code** (GitHub Copilot), **Cursor AI**, or **Google Antigravity**, you can invoke the full 8-agent pipeline directly from your IDE chat — no browser, no separate dashboard required.
 
 ```
-                  ┌─────────────────────────────────────────────┐
-                  │            agent_mesh.py (brain: LLM)       │
-                  │                                             │
-                  │  Architect ──consult_ide_chatbot()──────────┼──▶ GitHub Copilot (VS Code)
-                  │  Backend Dev ──────────────────────────────┼──▶ Cursor AI
-                  │  QA Engineer ──────────────────────────────┼──▶ Google Antigravity
-                  │  Security Analyst ─────────────────────────┘
-                  └─────────────────────────────────────────────┘
-                                         ▲
-                             codevx-vscode-bridge
-                             (VS Code extension :8001)
-                             vscode.lm API + workspace context
+  ┌──────────────────────┐     ┌──────────────────────┐     ┌──────────────────────┐
+  │   VS Code            │     │   Cursor AI           │     │  Google Antigravity  │
+  │   + GitHub Copilot   │     │   (built-in chat)     │     │  (Gemini)            │
+  └──────────┬───────────┘     └──────────┬────────────┘     └──────────┬───────────┘
+             │  MCP (SSE)                 │  MCP (SSE)                  │  MCP (SSE)
+             └────────────────────────────┼─────────────────────────┘
+                                          ▼
+                          ┌───────────────────────────────┐
+                          │   agent_mesh.py               │
+                          │   http://localhost:8000/mcp   │
+                          │                               │
+                          │   PM → Architect → DB →       │
+                          │   Backend → Frontend →        │
+                          │   QA → Security → DevOps      │
+                          └───────────────────────────────┘
 ```
 
-**When agents consult the IDE chatbots:**
+**Each IDE connects the same way — via the MCP server:**
 
-| Agent | Consults IDE chatbot for... |
-|-------|-----------------------------|
-| Architect | Architecture review — scalability, design patterns, second opinion |
-| Backend Dev | Code review after generation — patterns, best practices |
-| Frontend Dev | UI/UX review — accessibility (WCAG 2.1 AA), component patterns |
-| QA Engineer | Additional test case suggestions — edge cases, error paths, security tests |
-| Security Analyst | Vulnerability hints before running bandit — OWASP Top 10, injection |
+| IDE | How to connect |
+|-----|---------------|
+| **VS Code + GitHub Copilot** | Add `http://localhost:8000/mcp` to VS Code MCP settings (`.mcp.json` already included) |
+| **Cursor AI** | Add the MCP server URL in Cursor → Settings → MCP → add server |
+| **Google Antigravity** | Paste `config/antigravity_mcp_config.json` into the Antigravity MCP store |
 
-**Setup (5 minutes):**
+Once connected, use natural language in any of these IDEs to trigger the pipeline:
+
+> _"Submit an order to CoDevx: build a REST API for user authentication with JWT tokens"_
+
+**VS Code bridge (optional — routes Copilot as the agents' LLM brain):**
+
+The `codevx-vscode-bridge` VS Code extension is an optional component that lets you use **GitHub Copilot's models as the LLM brain** for the agents (instead of OpenAI/Anthropic/Gemini directly). This is separate from the MCP connection — you don't need the bridge just to invoke CoDevx from VS Code.
 
 1. **Install the bridge extension** from the `codevx-vscode-bridge/` folder:
    ```bash
@@ -326,28 +325,13 @@ CoDevx has **two distinct IDE integration modes** that work independently or tog
    code --install-extension codevx-vscode-bridge-1.0.0.vsix
    ```
 
-2. **Verify the bridge is running** — a `CoDevx Bridge :8001` item appears in the VS Code status bar:
-   ```bash
-   curl http://localhost:8001/health
-   # → {"status":"ok","capabilities":["copilot","cursor","workspace-context"],...}
-   ```
+2. **Verify the bridge is running** — a `CoDevx Bridge :8001` item appears in the VS Code status bar.
 
-3. **Enable IDE chatbot tools** in your `.env`:
+3. **Set the LLM provider to Copilot** in your `.env`:
    ```env
-   IDE_TOOLS_ENABLED=true
-   IDE_CHATBOT=copilot          # copilot | cursor | antigravity | all
+   LLM_PROVIDER=copilot
    COPILOT_BRIDGE_URL=http://localhost:8001
    ```
-
-   For **Google Antigravity** consultation (agents call Gemini \u2014 the models Antigravity uses internally):
-   ```env
-   IDE_CHATBOT=antigravity      # or "all" to consult all three IDEs
-   GOOGLE_API_KEY=AIza...       # same key used for Gemini brain if LLM_MODEL=gemini/*
-   ANTIGRAVITY_MODEL=gemini/gemini-2.5-pro
-   ```
-
-4. **Restart CoDevx** — agents now consult the IDE chatbot at each key pipeline stage.
-
 **LLM brain configuration** (independent of IDE tools):
 
 | Setting | Effect |
