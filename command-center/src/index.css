@@ -1,0 +1,30 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Safe area insets for notched Android phones */
+.safe-top    { padding-top: env(safe-area-inset-top); }
+.safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
+
+/* Slim custom scrollbar */
+@layer utilities {
+  .scrollbar-thin::-webkit-scrollbar       { width: 6px; height: 6px; }
+  .scrollbar-track-slate-900::-webkit-scrollbar-track { background: #0f172a; }
+  .scrollbar-thumb-slate-700::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+  .scrollbar-thumb-slate-700::-webkit-scrollbar-thumb:hover { background: #475569; }
+}
+
+/* Global base overrides */
+body {
+  background-color: #0f172a;
+  color: #cbd5e1;
+  font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none;
+}
+
+#root {
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}

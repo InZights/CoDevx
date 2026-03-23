@@ -1,0 +1,40 @@
+# AI Dev Team — .gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+
+# Environment — NEVER commit credentials
+.env
+.env.local
+.env.*.local
+
+# Database (contains task history, agent memory, generated code)
+*.db
+*.sqlite
+
+# Generated workspace (agents write here)
+workspace/
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/settings.json
+.idea/
+

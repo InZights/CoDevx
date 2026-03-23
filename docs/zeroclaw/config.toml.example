@@ -1,0 +1,66 @@
+# ============================================================
+# ZeroClaw Gateway Configuration — AI Dev Team Integration
+# ============================================================
+# ZeroClaw docs: https://github.com/zeroclaw-labs/zeroclaw
+#
+# Setup:
+#   1. Install: ./install.sh  OR  brew install zeroclaw
+#   2. Copy this file to ~/.zeroclaw/config.toml (edit as needed)
+#   3. Run onboarding: zeroclaw onboard
+#   4. Start services: zeroclaw daemon
+#
+# ZeroClaw Gateway starts at 127.0.0.1:42617 by default.
+# The AI Dev Team agent_mesh webhook listens at localhost:8000/webhook/zeroclaw.
+# ============================================================
+
+# Default LLM provider (ZeroClaw uses this for its own agent responses,
+# separate from the agent_mesh pipeline which uses OPENAI_API_KEY directly)
+default_provider = "openai"
+api_key          = "sk-..."           # OPENAI_API_KEY for ZeroClaw's own LLM use
+
+# ── Messaging Channels ──────────────────────────────────────────────────────
+# ZeroClaw natively connects to Discord, WhatsApp, Telegram, Slack, Signal,
+# iMessage, Matrix, IRC, Email, Bluesky, and 20+ more.
+# When MESSAGING_PROVIDER=zeroclaw in agent_mesh .env, ZeroClaw owns all channels.
+
+[channels.discord]
+token = "your-discord-bot-token"         # DISCORD_TOKEN
+
+[channels.whatsapp]
+enabled = true
+# Point Twilio/WATI sandbox webhook to: http://<host>:42617/whatsapp
+
+[channels.telegram]
+bot_token = "123456:ABC-DEF..."
+
+[channels.slack]
+bot_token  = "xoxb-..."
+app_token  = "xapp-..."
+
+# ── Security ─────────────────────────────────────────────────────────────────
+# ZeroClaw pairing: unknown senders must pair before sending orders.
+# The agent_mesh webhook also enforces HMAC-SHA256 via ZEROCLAW_WEBHOOK_SECRET.
+
+[security]
+require_pairing = true                   # DM pairing enabled (recommended)
+autonomy_level  = "supervised"           # ReadOnly | Supervised | Full
+
+[security.sandbox]
+workspace_isolation  = true
+path_traversal_block = true
+max_actions_per_hour = 100
+max_cost_per_day     = 5.00              # USD — guards against runaway LLM spend
+
+# ── Gateway ──────────────────────────────────────────────────────────────────
+[gateway]
+host = "127.0.0.1"
+port = 42617
+
+# ── Runtime ──────────────────────────────────────────────────────────────────
+[runtime]
+kind = "native"                          # or "docker" for stricter sandboxing
+
+# ── Tunnel (expose for agent_mesh webhook during dev) ────────────────────────
+# Comment this out in production — use a real load balancer instead.
+[tunnel]
+kind = "ngrok"                           # cloudflare | tailscale | ngrok | none

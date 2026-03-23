@@ -1,0 +1,103 @@
+# ============================================================
+# ZeroClaw SOP — AI Dev Team Order Routing
+# ============================================================
+# SOP = Standard Operating Procedure.
+# ZeroClaw runs these when a channel message matches the trigger pattern.
+#
+# Install location: ~/.zeroclaw/workspace/sops/ai-devteam.yaml
+# Docs: https://github.com/zeroclaw-labs/zeroclaw/blob/master/docs/reference/
+#
+# This SOP routes developer orders from ANY ZeroClaw channel (Discord, WhatsApp,
+# Telegram, Slack …) to the AI Dev Team agent_mesh pipeline at localhost:8000.
+# ============================================================
+
+# ── 1. New Order ─────────────────────────────────────────────────────────────
+- name: "AI Dev Team — New Order"
+  description: "Route 'order <task>' messages to agent_mesh SDLC pipeline"
+  trigger:
+    type: message
+    # Matches: "order build a login system" (case-insensitive)
+    pattern: "^order\\s+(.+)"
+    channels:                  # limit to these channels (omit to allow all)
+      - discord
+      - whatsapp
+      - telegram
+  actions:
+    - type: webhook
+      url: "http://localhost:8000/webhook/zeroclaw"
+      method: POST
+      headers:
+        Content-Type: "application/json"
+        # HMAC-SHA256 signature — matches ZEROCLAW_WEBHOOK_SECRET in agent_mesh .env
+        X-ZeroClaw-Signature: "sha256:{{hmac_sha256(body, env.ZEROCLAW_WEBHOOK_SECRET)}}"
+      body: |
+        {
+          "action": "order",
+          "task": "{{match.1}}",
+          "channel": "{{message.channel}}",
+          "sender": "{{message.sender_id}}",
+          "reply_url": "{{zeroclaw.reply_url}}"
+        }
+      # ZeroClaw delivers the synchronous JSON response["message"] back to the channel
+      response: "{{response.message}}"
+
+# ── 2. Approve Plan ──────────────────────────────────────────────────────────
+- name: "AI Dev Team — Approve Plan"
+  description: "Route 'approve' to start the pipeline"
+  trigger:
+    type: message
+    pattern: "^approve$"
+    channels: [discord, whatsapp, telegram]
+  actions:
+    - type: webhook
+      url: "http://localhost:8000/webhook/zeroclaw"
+      method: POST
+      headers:
+        Content-Type: "application/json"
+        X-ZeroClaw-Signature: "sha256:{{hmac_sha256(body, env.ZEROCLAW_WEBHOOK_SECRET)}}"
+      body: |
+        {
+          "action": "approve",
+          "channel": "{{message.channel}}",
+          "sender": "{{message.sender_id}}",
+          "reply_url": "{{zeroclaw.reply_url}}"
+        }
+      response: "{{response.message}}"
+
+# ── 3. Reject Plan ───────────────────────────────────────────────────────────
+- name: "AI Dev Team — Reject Plan"
+  description: "Route 'reject' to cancel the pending pipeline"
+  trigger:
+    type: message
+    pattern: "^reject$"
+    channels: [discord, whatsapp, telegram]
+  actions:
+    - type: webhook
+      url: "http://localhost:8000/webhook/zeroclaw"
+      method: POST
+      headers:
+        Content-Type: "application/json"
+        X-ZeroClaw-Signature: "sha256:{{hmac_sha256(body, env.ZEROCLAW_WEBHOOK_SECRET)}}"
+      body: |
+        {
+          "action": "reject",
+          "channel": "{{message.channel}}",
+          "sender": "{{message.sender_id}}"
+        }
+      response: "{{response.message}}"
+
+# ── 4. Status Check ──────────────────────────────────────────────────────────
+- name: "AI Dev Team — Status"
+  description: "Show current pipeline status from agent_mesh"
+  trigger:
+    type: message
+    pattern: "^(status|devteam status)$"
+  actions:
+    - type: http
+      url: "http://localhost:8000/api/state"
+      method: GET
+      response: |
+        Agent Mesh Status: {{response.current_task}}
+        Messaging: {{response.messaging}}
+        LLM: {{"Live (" + response.llm_model + ")" if response.llm_enabled else "Simulated"}}
+        Git: {{"GitHub PR enabled" if response.git_enabled else "Local commits only"}}

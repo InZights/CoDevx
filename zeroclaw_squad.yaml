@@ -1,0 +1,244 @@
+# ============================================================
+# AI Dev Team — Squad Configuration
+# ============================================================
+
+team_name: "Struktur AI Builders"
+version: "4.0"
+docs: "README.md"
+
+# ── Messaging / Channel Layer ─────────────────────────────────────────────────
+# MESSAGING_PROVIDER env var: discord | whatsapp | both | zeroclaw
+#
+# zeroclaw mode (recommended):
+#   ZeroClaw (https://github.com/zeroclaw-labs/zeroclaw) is a Rust-native AI
+#   assistant daemon that manages ALL messaging channels natively — Discord,
+#   WhatsApp, Telegram, Slack, Signal, iMessage, Matrix, IRC, Email, and 20+ more.
+#   When MESSAGING_PROVIDER=zeroclaw, agent_mesh no longer runs discord.py or
+#   Twilio directly; ZeroClaw's SOP webhooks drive the pipeline instead.
+#
+#   What ZeroClaw IS:
+#     - Single Rust binary, <5 MB RAM, <10 ms cold start
+#     - Channel gateway: one daemon, 20+ messaging surfaces
+#     - SOP (Standard Operating Procedure) webhook automation
+#     - Pairing security, sandboxing, approval gating, rate limiting
+#     - Web dashboard (React 19 + Vite) at port 42617
+#   What ZeroClaw is NOT:
+#     - A Python library (cannot pip install — install via ./install.sh)
+#     - A replacement for the agent_mesh pipeline (it's the channel/security layer)
+#
+#   Integration architecture:
+#     [Any channel] → ZeroClaw daemon → SOP webhook → POST /webhook/zeroclaw
+#                                                   → execute_pipeline()
+#                                                   → reply_url callback → ZeroClaw
+#                                                   → delivers result to original channel
+#
+#   Setup:
+#     1. install: curl -fsSL https://zeroclawlabs.ai/install.sh | bash
+#     2. onboard: zeroclaw onboard
+#     3. copy: zeroclaw.config.toml.example → ~/.zeroclaw/config.toml
+#        copy: zeroclaw.sop.yaml.example    → ~/.zeroclaw/workspace/sops/ai-devteam.yaml
+#     4. start:   zeroclaw daemon
+#     5. set:     MESSAGING_PROVIDER=zeroclaw  ZEROCLAW_WEBHOOK_SECRET=<secret>
+
+messaging:
+  # MESSAGING_PROVIDER env var: discord | whatsapp | both | zeroclaw
+  primary: "discord"        # override with MESSAGING_PROVIDER=zeroclaw for full ZeroClaw mode
+  discord:
+    approval_channel: "plans"
+    order_channel: "orders"
+    log_channel: "activity-log"
+    report_channel: "reports"
+    order_command: "!order <task>"
+  whatsapp:
+    provider: "twilio"
+    order_keyword: "order <task>"
+    approve_keyword: "approve"
+    reject_keyword: "reject"
+    webhook_endpoint: "POST /webhook/whatsapp"
+    # Required env: TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_FROM, MANAGER_WHATSAPP
+  zeroclaw:
+    provider: "zeroclaw-labs/zeroclaw"
+    gateway_url: "http://localhost:42617"
+    webhook_endpoint: "POST /webhook/zeroclaw"
+    security: "HMAC-SHA256 (ZEROCLAW_WEBHOOK_SECRET)"
+    autonomy_level: "supervised"           # ReadOnly | Supervised | Full
+    channels_supported:
+      - discord
+      - whatsapp
+      - telegram
+      - slack
+      - signal
+      - imessage
+      - matrix
+      - irc
+      - email
+      - bluesky
+      - nostr
+      - mattermost
+      - "20+ more"
+    sop_config: "docs/zeroclaw/sop.yaml.example"
+    gateway_config: "docs/zeroclaw/config.toml.example"
+
+orchestrator:
+  name: "Project Manager"
+  provider: "openai"          # real LLM via OPENAI_API_KEY; falls back to simulation
+  mode: "api"
+  profile: ".github/agents/manager.md"
+  approval_required: true
+  approval_timeout_minutes: 30
+
+llm:
+  provider: "openai"          # set OPENAI_API_KEY to enable
+  model: "gpt-4o"             # override with OPENAI_MODEL
+  max_tokens: 4000            # override with OPENAI_MAX_TOKENS
+  temperature: 0.3
+  fallback: "simulation"      # when OPENAI_API_KEY is absent
+
+storage:
+  engine: "sqlite"            # aiosqlite, async
+  path: "./agent_mesh.db"     # override with DB_PATH
+  tables: ["logs", "task_history", "generated_files", "agent_memory"]
+  log_retention: 100
+  task_retention: 50
+
+git:
+  workspace: "./workspace"    # override with GIT_WORKSPACE
+  auto_commit: true
+  branch_prefix: "feat/"
+  auto_push: true
+  # Optional PR creation — requires GITHUB_TOKEN + GITHUB_REPO
+  github_pr: true
+
+tool_execution:
+  enabled: true               # override with ENABLE_REAL_TOOLS=true|false
+  python_tests: "pytest --tb=short -q --cov=. --cov-report=term-missing"
+  js_tests: "npm test -- --run --reporter=verbose"
+  security_scan: "bandit -r . -ll -f txt --exit-zero"
+  npm_audit: "npm audit --audit-level=high --json"
+  docker_build: false         # override with DOCKER_BUILD=true|false
+  retry_attempts: 2           # override with MAX_RETRIES
+
+memory:
+  enabled: true
+  backend: "sqlite"           # same DB as storage.path
+  inject_k: 5                 # past memories per task (override: MEMORY_CONTEXT_K)
+  search_mode: "keyword"      # keyword search over agent_memory.content column
+  retention: "unlimited"      # agent memories persist across all task runs
+
+pipeline:
+  max_subtasks: 5             # override with MAX_SUBTASKS
+  phases:
+    - architect               # 1x: full system design + memory recall
+    - decompose               # split task into N phases via LLM
+    - frontend_dev            # parallel with backend_dev
+    - backend_dev             # parallel with frontend_dev
+    - database_engineer       # per phase
+    - qa_engineer             # with real test execution + retry loop
+    - security_analyst        # with real bandit/npm-audit + fix loop
+    - devops_engineer         # CI/CD + optional docker build
+    - git_commit_push         # feat/xxxx branch + GitHub PR
+    - project_manager         # delivery report + memory store
+
+agents:
+  - name: "Architect"
+    role: "System Designer"
+    provider: "openai"
+    profile: ".github/agents/architect.md"
+    tools: ["codebase-search", "read-file", "filesystem"]
+    instructions: "Analyze the codebase structure. Design APIs, define interfaces, validate tech stack decisions. Always output a structured design doc before any code is written."
+    triggers: ["design", "architect", "review structure", "plan"]
+
+  - name: "Frontend Dev"
+    role: "UI Engineer"
+    provider: "openai"
+    profile: ".github/agents/frontend.md"
+    tools: ["filesystem", "shell", "npm"]
+    instructions: "Write React components with TypeScript. Use Tailwind CSS for styling. Ensure mobile-first responsive design. Follow WCAG 2.1 accessibility standards."
+    triggers: ["component", "ui", "react", "frontend", "tsx", "css", "tailwind"]
+
+  - name: "Backend Dev"
+    role: "API Engineer"
+    provider: "openai"
+    profile: ".github/agents/backend.md"
+    tools: ["filesystem", "shell", "python"]
+    instructions: "Write FastAPI endpoints with Python 3.12 type hints. Validate all input with Pydantic. Never expose raw exceptions to clients. Use async/await throughout."
+    triggers: ["endpoint", "api", "route", "fastapi", "backend", "python"]
+
+  - name: "QA Engineer"
+    role: "Test Lead"
+    provider: "openai"
+    profile: ".github/agents/qa.md"
+    tools: ["pytest", "vitest", "coverage", "shell"]
+    instructions: "Write test suites for every feature. Enforce minimum 80% test coverage. Run pytest for Python and Vitest for TypeScript. Fail the pipeline if coverage drops."
+    triggers: ["test", "qa", "coverage", "pytest", "vitest", "bug"]
+
+  - name: "DevOps Engineer"
+    role: "Infrastructure & CI"
+    provider: "openai"
+    profile: ".github/agents/devops.md"
+    tools: ["docker", "github-actions", "shell", "filesystem"]
+    instructions: "Write Dockerfiles with multi-stage builds. Create GitHub Actions workflows for CI/CD. Use least-privilege principles in all configurations."
+    triggers: ["docker", "ci", "deploy", "pipeline", "github actions", "devops", "infra"]
+
+  - name: "Security Analyst"
+    role: "AppSec Engineer"
+    provider: "openai"
+    profile: ".github/agents/security.md"
+    tools: ["bandit", "npm-audit", "trivy", "shell"]
+    instructions: "Run bandit on Python code. Run npm audit on frontend. Scan Docker images with trivy. Reject any commit that introduces OWASP Top 10 vulnerabilities or secrets in code."
+    triggers: ["security", "vulnerability", "auth", "owasp", "audit", "secret", "cve"]
+
+  - name: "Database Engineer"
+    role: "Data Layer Engineer"
+    provider: "openai"
+    profile: ".github/agents/database.md"
+    tools: ["alembic", "sql", "filesystem", "shell"]
+    instructions: "Design normalized database schemas. Write Alembic migrations. Optimize queries. Never use raw string formatting for SQL — always use parameterized queries."
+    triggers: ["database", "schema", "migration", "sql", "model", "orm", "alembic"]
+
+workflow:
+  pipeline_order:
+    - "Project Manager"     # Decomposes task, assigns work
+    - "Architect"           # Designs solution
+    - ["Frontend Dev", "Backend Dev"]  # Parallel coding
+    - "Database Engineer"   # Schema changes if needed
+    - "QA Engineer"         # Tests all new code
+    - "Security Analyst"    # Security scan
+    - "DevOps Engineer"     # CI/CD + Docker update
+    - "Project Manager"     # Final report
+
+  gates:
+    - after: "Project Manager"  # Architect approval
+      requires_approval: true
+    - after: "QA Engineer"      # Block if coverage < 80%
+      auto_gate: "coverage >= 80"
+    - after: "Security Analyst" # Block on any HIGH/CRITICAL findings
+      auto_gate: "no_critical_vulns"
+
+standards:
+  python:
+    style: "PEP8"
+    type_hints: "required"
+    min_python_version: "3.12"
+  frontend:
+    framework: "React 19"
+    css: "Tailwind CSS"
+    testing: "Vitest"
+    accessibility: "WCAG 2.1 AA"
+  coverage_threshold: 80
+  branch_protection: true
+  pr_required: true
+
+features:
+  messaging:
+    discord: true
+    whatsapp: true          # via Twilio — configure MESSAGING_PROVIDER
+  llm:
+    real_calls: true        # OpenAI API or compatible endpoint
+    simulation_fallback: true
+  storage:
+    persistent: true        # SQLite — survives restarts
+  git:
+    auto_commit: true
+    auto_push: true
+    auto_pr: true           # GitHub API
