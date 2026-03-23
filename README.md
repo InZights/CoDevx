@@ -332,6 +332,35 @@ The `codevx-vscode-bridge` VS Code extension is an optional component that lets 
    LLM_PROVIDER=copilot
    COPILOT_BRIDGE_URL=http://localhost:8001
    ```
+
+**IDE chatbot consultation (optional \u2014 agents get second opinions mid-pipeline):**
+
+When `IDE_TOOLS_ENABLED=true`, agents can call the IDE chatbot as a **specialist reviewer** during specific pipeline phases. This is independent of the MCP connection and the LLM brain setting.
+
+| Agent | Consults IDE chatbot for... |
+|-------|-----------------------------|
+| Architect | Architecture review \u2014 scalability, design patterns, second opinion |
+| Backend Dev | Code review after generation \u2014 patterns, best practices |
+| Frontend Dev | UI/UX review \u2014 accessibility (WCAG 2.1 AA), component patterns |
+| QA Engineer | Additional test case suggestions \u2014 edge cases, error paths |
+| Security Analyst | Vulnerability hints before bandit \u2014 OWASP Top 10, injection |
+
+Enable in your `.env`:
+
+```env
+IDE_TOOLS_ENABLED=true
+IDE_CHATBOT=copilot          # copilot | cursor | antigravity | all
+COPILOT_BRIDGE_URL=http://localhost:8001   # required for copilot/cursor
+```
+
+For **Google Antigravity / Gemini** as the consulting chatbot:
+
+```env
+IDE_CHATBOT=antigravity
+ANTIGRAVITY_API_KEY=AIza...
+ANTIGRAVITY_MODEL=gemini/gemini-2.5-pro
+```
+
 **LLM brain configuration** (independent of IDE tools):
 
 | Setting | Effect |
