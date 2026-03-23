@@ -259,7 +259,7 @@ In Cursor Composer or Chat:
 Antigravity is a standalone AI IDE (desktop app) that supports MCP servers. Connect CoDevx to Antigravity in two steps:
 
 1. Open Antigravity → `...` menu in the side panel → **Manage MCP Servers** → **View raw config**
-2. Paste the contents of `antigravity_mcp_config.json` into the config editor and save.
+2. Paste the contents of `config/antigravity_mcp_config.json` into the config editor and save.
 
 Antigravity will then have access to all CoDevx MCP tools (`codevx_submit_order`, `codevx_get_state`, etc.) directly from its Agent panel:
 > _“Use codevx_submit_order to build a real-time collaborative whiteboard”_
@@ -271,7 +271,7 @@ Antigravity runs **Gemini 3.1 Pro, Claude Sonnet 4.6, GPT-OSS-120b** as its reas
 | File | Read by | Purpose |
 |------|---------|--------|
 | `.mcp.json` | Cursor | MCP server auto-discovery |
-| `antigravity_mcp_config.json` | **Google Antigravity** | Paste into Antigravity → Manage MCP Servers → View raw config |
+| `config/antigravity_mcp_config.json` | **Google Antigravity** | Paste into Antigravity → Manage MCP Servers → View raw config |
 | `.github/copilot-instructions.md` | VS Code Copilot | Workspace instructions + code standards |
 | `.cursor/rules/codevx.mdc` | Cursor AI | Project rules (`alwaysApply: true`) |
 | `AGENTS.md` | All AI-native IDEs | Universal agent manifest |
@@ -758,21 +758,30 @@ The React PWA provides a real-time dashboard for monitoring the pipeline.
 ```
 AI-DEV-TEAM/
 │
-├── agent_mesh.py              # FastAPI backend + MCP server (core)
+├── agent_mesh.py              # FastAPI backend + MCP server (single-file by design)
 ├── requirements.txt           # Python dependencies
 ├── Dockerfile                 # Backend container image
 ├── docker-compose.yml         # Full-stack orchestration
 ├── .env.example               # Environment variable template → copy to .env
-├── .gitignore                 # Git ignore rules
+├── .gitignore
 ├── zeroclaw_squad.yaml        # Team/agent/pipeline configuration
-├── .mcp.json                  # MCP server discovery (Cursor / Antigravity)
+├── .mcp.json                  # MCP server discovery (Cursor / VS Code)
 ├── AGENTS.md                  # Universal agent manifest (all AI-native IDEs)
-├── .github/
-│   └── copilot-instructions.md  # VS Code Copilot workspace instructions
-└── .cursor/
-    └── rules/codevx.mdc       # Cursor AI project rules
+├── LICENSE
 │
-├── command-center/            # React 19 + TypeScript + Tailwind PWA
+├── config/                    # IDE and tool configuration files
+│   └── antigravity_mcp_config.json  # Paste into Antigravity MCP store
+│
+├── scripts/                   # Development and maintenance scripts
+│   └── patches/               # One-shot patch scripts (historical reference)
+│       ├── _patch_mcp.py
+│       ├── _patch_llm_provider.py
+│       ├── _patch_ide_tools.py
+│       ├── _patch_multillm.py
+│       ├── _patch_langgraph.py
+│       └── _patch_wa_hitl.py
+│
+├── command-center/            # React 19 + TypeScript + Tailwind PWA dashboard
 │   ├── Dockerfile             # Multi-stage: Node build → Nginx
 │   ├── nginx.conf             # Reverse proxy to backend
 │   ├── package.json
@@ -784,31 +793,19 @@ AI-DEV-TEAM/
 │   └── src/
 │       ├── App.tsx
 │       ├── main.tsx
-│       ├── components/
-│       │   ├── AgentCard.tsx
-│       │   ├── AgentGrid.tsx
-│       │   ├── ActiveOrder.tsx
-│       │   ├── Header.tsx
-│       │   ├── MobileNav.tsx
-│       │   ├── Sidebar.tsx
-│       │   ├── TaskHistoryList.tsx
-│       │   └── TerminalLogs.tsx
-│       ├── pages/
-│       │   ├── Dashboard.tsx
-│       │   ├── AgentsPage.tsx
-│       │   ├── LogsPage.tsx
-│       │   ├── HistoryPage.tsx
-│       │   └── SettingsPage.tsx
+│       ├── components/        # AgentCard, AgentGrid, Header, Sidebar, …
+│       ├── pages/             # Dashboard, AgentsPage, LogsPage, …
 │       ├── hooks/
 │       │   └── useAgentState.ts   # WebSocket + state management
-│       ├── types/
-│       │   └── index.ts           # Shared TypeScript types
-│       └── utils/
-│           └── colors.ts
+│       ├── types/index.ts         # Shared TypeScript types
+│       └── utils/colors.ts
 │
-└── docs/
-    ├── architecture.md            # Extended architecture notes (MCP, APIs, DB schema)
-    └── zeroclaw/
+├── codevx-vscode-bridge/      # VS Code extension — HTTP bridge → GitHub Copilot
+│   └── src/extension.ts
+│
+├── docs/                      # Extended documentation
+│   ├── architecture.md        # Architecture Decision Records, API contracts, DB schema
+│   └── zeroclaw/
         ├── config.toml.example    # ZeroClaw gateway config template
         └── sop.yaml.example       # ZeroClaw SOP webhook templates
 ```
