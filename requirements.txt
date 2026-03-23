@@ -16,3 +16,4 @@ httpx==0.28.1
 # LiteLLM routes to 100+ providers (OpenAI, Anthropic, Gemini, Groq, Mistral,
 # Ollama, Bedrock, Together AI, etc.) with a single unified interface.
 litellm>=1.40.0
+langgraph>=0.2.0
