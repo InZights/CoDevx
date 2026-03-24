@@ -1,11 +1,16 @@
 """
-AI Dev Team — Agent Mesh v4.0
+CoDevx — Agent Mesh v3.0
 ================================
-New in v4:
-  - WhatsApp messaging via Twilio (alongside or instead of Discord)
-  - Real LLM calls via OpenAI API (GPT-4o / Azure / any OpenAI-compatible endpoint)
-  - Persistent SQLite storage — logs & task history survive restarts
-  - Git auto-commit on feature branches + optional GitHub PR creation
+Autonomous 8-agent AI software development team.
+FastAPI backend with:
+  - LiteLLM-powered agent pipeline (100+ LLM providers)
+  - SQLite persistence (aiosqlite) — logs, tasks, files, memory
+  - Git workspace — auto-branch, commit, GitHub PR
+  - Tool execution — pytest, bandit, npm audit
+  - Discord bot bridge (4-channel) + WhatsApp/Twilio + ZeroClaw webhooks
+  - WebSocket real-time state push  (/ws/state)
+  - REST /api/* + POST /api/order  (browser-accessible)
+  - MCP server (/mcp)  — VS Code Copilot · Cursor · Antigravity
 """
 
 import asyncio
@@ -14,22 +19,20 @@ import hmac
 import json
 import os
 import re
-import subprocess
 import time
 import uuid
 from contextlib import asynccontextmanager
-from pathlib import Path
 from typing import Any
 
 import aiosqlite
-from dotenv import load_dotenv
-from fastapi import FastAPI, Form, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, Response
-from pydantic import BaseModel
 import discord
-from discord.ext import commands
 import uvicorn
+from discord.ext import commands
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
 
 load_dotenv()
 
@@ -37,10 +40,7 @@ load_dotenv()
 # 1. CONFIGURATION
 # ============================================================
 
-# Messaging: discord | whatsapp | both | zeroclaw
-MESSAGING_PROVIDER = os.getenv("MESSAGING_PROVIDER", "discord")
-
-# Discord
+# ── Discord ────────────────────────────────────────────────────────────────────
 DISCORD_TOKEN      = os.getenv("DISCORD_TOKEN", "")
 MANAGER_DISCORD_ID = int(os.getenv("MANAGER_DISCORD_ID", "0"))
 CH_ORDERS   = int(os.getenv("DISCORD_CHANNEL_ORDERS",   "0"))
@@ -48,101 +48,47 @@ CH_PLANS    = int(os.getenv("DISCORD_CHANNEL_PLANS",    "0"))
 CH_ACTIVITY = int(os.getenv("DISCORD_CHANNEL_ACTIVITY", "0"))
 CH_REPORTS  = int(os.getenv("DISCORD_CHANNEL_REPORTS",  "0"))
 
-# WhatsApp / Twilio
-TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
-TWILIO_AUTH_TOKEN  = os.getenv("TWILIO_AUTH_TOKEN", "")
-TWILIO_WA_FROM     = os.getenv("TWILIO_WHATSAPP_FROM", "whatsapp:+14155238886")
-MANAGER_WHATSAPP   = os.getenv("MANAGER_WHATSAPP", "")  # e.g. whatsapp:+60123456789
-
-# ── LLM Brain ─────────────────────────────────────────────────────────────────
-# LLM_MODEL is the single knob to switch your agents' brain.
-# LiteLLM routes to the right provider automatically based on the model prefix.
-#
-#  Provider        LLM_MODEL examples                       Required key
-#  OpenAI          gpt-4o, gpt-4.1, o3-mini                 OPENAI_API_KEY
-#  Anthropic       claude-opus-4, claude-sonnet-4            ANTHROPIC_API_KEY
-#  Google Gemini   gemini/gemini-2.5-pro, gemini/gemini-3-flash  GOOGLE_API_KEY
-#  Groq            groq/llama-3.3-70b, groq/mixtral-8x7b    GROQ_API_KEY
-#  Mistral         mistral/mistral-large, mistral/codestral  MISTRAL_API_KEY
-#  Ollama (local)  ollama/llama3.3, ollama/qwen2.5-coder     (no key needed)
-#  Together AI     together_ai/meta-llama/Llama-3-70b        TOGETHERAI_API_KEY
-#  AWS Bedrock     bedrock/anthropic.claude-3-5-sonnet       BEDROCK creds below
-#  Custom OpenAI   openai/<model-name>                       + OPENAI_BASE_URL
-LLM_MODEL       = os.getenv("LLM_MODEL", "gpt-4o")          # e.g. claude-opus-4 / gemini/gemini-2.5-pro
-OPENAI_API_KEY  = os.getenv("OPENAI_API_KEY", "")           # OpenAI / Azure / OpenAI-compatible
-OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "")          # optional: override API endpoint
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")      # Anthropic Claude
-GOOGLE_API_KEY    = os.getenv("GOOGLE_API_KEY", "")         # Google Gemini / Vertex
-GOOGLE_PROJECT    = os.getenv("GOOGLE_PROJECT", "")         # Vertex AI project (optional)
-GROQ_API_KEY      = os.getenv("GROQ_API_KEY", "")           # Groq
-MISTRAL_API_KEY   = os.getenv("MISTRAL_API_KEY", "")        # Mistral AI
-TOGETHERAI_API_KEY = os.getenv("TOGETHERAI_API_KEY", "")    # Together AI
-OLLAMA_HOST       = os.getenv("OLLAMA_HOST", "http://localhost:11434")  # Ollama
-AWS_ACCESS_KEY_ID     = os.getenv("AWS_ACCESS_KEY_ID", "")  # AWS Bedrock
-AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY", "")
-AWS_REGION_NAME       = os.getenv("AWS_REGION_NAME", "us-east-1")
-
-# Legacy: OPENAI_MODEL used as fallback if LLM_MODEL is not set
-OPENAI_MODEL    = os.getenv("OPENAI_MODEL", LLM_MODEL)
-
-# Git
-GIT_WORKSPACE = Path(os.getenv("GIT_WORKSPACE", "./workspace"))
-GITHUB_TOKEN  = os.getenv("GITHUB_TOKEN", "")
-GITHUB_REPO   = os.getenv("GITHUB_REPO", "")  # "owner/repo"
-
-# Database
-DB_PATH = os.getenv("DB_PATH", "./agent_mesh.db")
-
-# ZeroClaw Gateway — set MESSAGING_PROVIDER=zeroclaw to replace discord.py + Twilio with
-# ZeroClaw's native channel layer (Discord, WhatsApp, Telegram, Slack, Signal, and 20+ more).
-# Install ZeroClaw: https://github.com/zeroclaw-labs/zeroclaw -> ./install.sh -> zeroclaw daemon
-ZEROCLAW_GATEWAY_URL    = os.getenv("ZEROCLAW_GATEWAY_URL", "http://localhost:42617")
-ZEROCLAW_WEBHOOK_SECRET = os.getenv("ZEROCLAW_WEBHOOK_SECRET", "")  # HMAC-SHA256 secret
-
-# Advanced pipeline — v4.0
-OPENAI_MAX_TOKENS = int(os.getenv("OPENAI_MAX_TOKENS", "4000"))   # tokens per agent call
-
-# IDE Copilot Bridge (LLM_PROVIDER=copilot routes agent calls through GitHub Copilot/Cursor)
-# Providers: openai | copilot | cursor | simulate
-LLM_PROVIDER       = os.getenv("LLM_PROVIDER", "openai")  # default: OpenAI API
-COPILOT_BRIDGE_URL = os.getenv("COPILOT_BRIDGE_URL", "http://localhost:8001")  # VS Code bridge
-
-# IDE Chatbot Tools -- agents consult IDE chatbots as SUPPLEMENTARY specialists
-# This is independent of LLM_PROVIDER (the brain); these are additional consultants.
-# Set IDE_TOOLS_ENABLED=true and at least one IDE source to activate.
-IDE_TOOLS_ENABLED   = os.getenv("IDE_TOOLS_ENABLED", "false").lower() == "true"
-IDE_CHATBOT         = os.getenv("IDE_CHATBOT", "copilot")  # copilot | cursor | antigravity | all
-# Antigravity IDE -- the Google AI IDE connects to CoDevx via MCP (see antigravity_mcp_config.json).
-# For "consult Antigravity" in IDE_TOOLS, we call Google Gemini directly (what Antigravity runs).
-# Set GOOGLE_API_KEY above and use IDE_CHATBOT=antigravity to send hints to Gemini during pipeline.
-ANTIGRAVITY_MODEL = os.getenv("ANTIGRAVITY_MODEL", "gemini/gemini-2.5-pro")  # Gemini model for IDE tool consultation
-
-MAX_RETRIES       = int(os.getenv("MAX_RETRIES", "2"))             # QA / Security retry attempts
-MAX_SUBTASKS      = int(os.getenv("MAX_SUBTASKS", "5"))            # max implementation phases
-ENABLE_REAL_TOOLS = os.getenv("ENABLE_REAL_TOOLS", "true").lower() == "true"  # run pytest/bandit/npm-audit
-DOCKER_BUILD      = os.getenv("DOCKER_BUILD", "false").lower() == "true"      # docker build after pipeline
-
-MEMORY_CONTEXT_K  = int(os.getenv("MEMORY_CONTEXT_K", "5"))       # past memories to inject
-
-# ── LangGraph ─────────────────────────────────────────────────────────────────
-# Set LANGGRAPH_ENABLED=true to use LangGraph ReAct subgraphs for QA and
-# Security gates (true autonomous reasoning loops + SQLite checkpointing).
-# Set HUMAN_GATE_ENABLED=true to pause after Architect and notify the manager
-# via Discord (#plans channel button) and/or WhatsApp before coding begins.
-LANGGRAPH_ENABLED  = os.getenv("LANGGRAPH_ENABLED",  "false").lower() == "true"
-HUMAN_GATE_ENABLED = os.getenv("HUMAN_GATE_ENABLED", "false").lower() == "true"
-HUMAN_GATE_TIMEOUT = int(os.getenv("HUMAN_GATE_TIMEOUT", "300"))  # seconds
-
-# CORS
+# ── CORS ───────────────────────────────────────────────────────────────────────
 CORS_ORIGINS = os.getenv(
     "CORS_ORIGINS", "http://localhost:5173,http://localhost:3000"
 ).split(",")
+
+# ── LLM ───────────────────────────────────────────────────────────────────────
+LLM_MODEL         = os.getenv("LLM_MODEL", "gpt-4o")
+OPENAI_API_KEY    = os.getenv("OPENAI_API_KEY", "")
+OPENAI_MAX_TOKENS = int(os.getenv("OPENAI_MAX_TOKENS", "4000"))
+LLM_ENABLED       = bool(OPENAI_API_KEY)
+
+# ── Pipeline controls ──────────────────────────────────────────────────────────
+MAX_RETRIES         = int(os.getenv("MAX_RETRIES", "2"))
+MAX_SUBTASKS        = int(os.getenv("MAX_SUBTASKS", "5"))
+MEMORY_CONTEXT_K    = int(os.getenv("MEMORY_CONTEXT_K", "5"))
+ENABLE_REAL_TOOLS   = os.getenv("ENABLE_REAL_TOOLS", "false").lower() == "true"
+DOCKER_BUILD        = os.getenv("DOCKER_BUILD",        "false").lower() == "true"
+
+# ── Storage ────────────────────────────────────────────────────────────────────
+DB_PATH = os.getenv("DB_PATH", "./agent_mesh.db")
+
+# ── Git / GitHub ───────────────────────────────────────────────────────────────
+GIT_WORKSPACE = os.getenv("GIT_WORKSPACE", "./workspace")
+GITHUB_TOKEN  = os.getenv("GITHUB_TOKEN", "")
+GITHUB_REPO   = os.getenv("GITHUB_REPO", "")
+
+# ── WhatsApp / Twilio ──────────────────────────────────────────────────────────
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
+TWILIO_AUTH_TOKEN_ = os.getenv("TWILIO_AUTH_TOKEN", "")   # trailing _ avoids name clash
+TWILIO_FROM        = os.getenv("TWILIO_WHATSAPP_FROM", "")
+MANAGER_WHATSAPP   = os.getenv("MANAGER_WHATSAPP", "")
+
+# ── ZeroClaw ──────────────────────────────────────────────────────────────────
+ZEROCLAW_URL    = os.getenv("ZEROCLAW_GATEWAY_URL", "http://localhost:42617")
+ZEROCLAW_SECRET = os.getenv("ZEROCLAW_WEBHOOK_SECRET", "")
+MESSAGING_PROVIDER = os.getenv("MESSAGING_PROVIDER", "discord")
 
 
 # ============================================================
 # 2. SHARED STATE
 # ============================================================
-
 SYSTEM_STATE: dict[str, Any] = {
     "agents": {
         "Project Manager":   {"status": "IDLE", "color": "blue"},
@@ -155,132 +101,149 @@ SYSTEM_STATE: dict[str, Any] = {
         "Database Engineer": {"status": "IDLE", "color": "gray"},
     },
     "current_task": "None",
-    "logs": ["[BOOT] Agent Mesh v3.0 initializing..."],
+    "logs": ["[BOOT] CoDevx Agent Mesh v3.0 initializing..."],
     "history": [],
-    "messaging":        MESSAGING_PROVIDER,
-    "llm_enabled":      bool(OPENAI_API_KEY),
-    "git_enabled":      bool(GITHUB_REPO),
-    "zeroclaw_enabled": bool(ZEROCLAW_WEBHOOK_SECRET) or MESSAGING_PROVIDER == "zeroclaw",
+    "llm_enabled":        LLM_ENABLED,
+    "git_enabled":        bool(GITHUB_TOKEN),
+    "real_tools_enabled": ENABLE_REAL_TOOLS,
+    "zeroclaw_enabled":   MESSAGING_PROVIDER == "zeroclaw",
+    "messaging":          MESSAGING_PROVIDER,
 }
 
 _ws_clients: set[WebSocket] = set()
-_wa_pending: dict[str, str] = {}                       # WhatsApp sender -> pending task
-_zc_pending: dict[str, tuple[str, str]] = {}           # ZeroClaw sender -> (task, reply_url)
-_pipeline_gates: dict[str, asyncio.Event] = {}  # task_id -> Event (human-in-the-loop gate)
-_gate_task_map:  dict[str, str]           = {}  # "current" -> task_id (WhatsApp shortcut)
+_db: aiosqlite.Connection | None = None
 
 
 # ============================================================
-# 3. DATABASE  (SQLite via aiosqlite — survives restarts)
+# 3. DATABASE  (aiosqlite)
 # ============================================================
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS logs (
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts      TEXT    NOT NULL,
+    message TEXT    NOT NULL
+);
+CREATE TABLE IF NOT EXISTS task_history (
+    id             TEXT    PRIMARY KEY,
+    description    TEXT    NOT NULL,
+    completed_at   TEXT    NOT NULL,
+    files_modified INTEGER DEFAULT 0,
+    tests_passed   INTEGER DEFAULT 0,
+    branch         TEXT,
+    pr_url         TEXT,
+    llm_used       INTEGER DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS generated_files (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id    TEXT    NOT NULL,
+    file_path  TEXT    NOT NULL,
+    content    TEXT    NOT NULL,
+    created_at TEXT    NOT NULL
+);
+CREATE TABLE IF NOT EXISTS agent_memory (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id      TEXT    NOT NULL,
+    agent        TEXT    NOT NULL,
+    memory_type  TEXT    NOT NULL,
+    content      TEXT    NOT NULL,
+    created_at   TEXT    NOT NULL
+);
+"""
+
 
 async def init_db() -> None:
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS logs (
-                id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                message    TEXT    NOT NULL,
-                created_at TEXT    DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS task_history (
-                id             TEXT PRIMARY KEY,
-                description    TEXT,
-                completed_at   TEXT,
-                files_modified INTEGER DEFAULT 0,
-                tests_passed   INTEGER DEFAULT 0,
-                pr_url         TEXT,
-                branch         TEXT,
-                llm_used       INTEGER DEFAULT 0
-            )
-        """)
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS generated_files (
-                id        INTEGER PRIMARY KEY AUTOINCREMENT,
-                task_id   TEXT,
-                file_path TEXT,
-                content   TEXT,
-                FOREIGN KEY (task_id) REFERENCES task_history(id)
-            )
-        """)
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS agent_memory (
-                id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                task_id    TEXT,
-                agent      TEXT,
-                category   TEXT,
-                content    TEXT,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        await db.commit()
+    global _db
+    _db = await aiosqlite.connect(DB_PATH)
+    _db.row_factory = aiosqlite.Row
+    await _db.executescript(_SCHEMA)
+    await _db.commit()
+    # Pre-load task history into SYSTEM_STATE
+    rows = await db_load_history()
+    if rows:
+        SYSTEM_STATE["history"] = rows
 
 
-async def db_save_log(message: str) -> None:
-    try:
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute("INSERT INTO logs (message) VALUES (?)", (message,))
-            await db.commit()
-    except Exception:
-        pass
+async def db_log(ts: str, message: str) -> None:
+    if not _db:
+        return
+    await _db.execute("INSERT INTO logs (ts, message) VALUES (?, ?)", (ts, message))
+    await _db.commit()
+    await _db.execute(
+        "DELETE FROM logs WHERE id NOT IN (SELECT id FROM logs ORDER BY id DESC LIMIT 100)"
+    )
+    await _db.commit()
 
 
-async def db_save_task(entry: dict) -> None:
-    try:
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute(
-                """INSERT OR REPLACE INTO task_history
-                   (id, description, completed_at, files_modified, tests_passed,
-                    pr_url, branch, llm_used)
-                   VALUES (?,?,?,?,?,?,?,?)""",
-                (
-                    entry["id"], entry["description"], entry["completed_at"],
-                    entry["files_modified"], entry["tests_passed"],
-                    entry.get("pr_url"), entry.get("branch"),
-                    int(entry.get("llm_used", False)),
-                ),
-            )
-            await db.commit()
-    except Exception:
-        pass
+async def db_save_task(record: dict[str, Any]) -> None:
+    if not _db:
+        return
+    await _db.execute(
+        """INSERT INTO task_history
+           (id, description, completed_at, files_modified, tests_passed, branch, pr_url, llm_used)
+           VALUES (:id, :description, :completed_at, :files_modified, :tests_passed, :branch, :pr_url, :llm_used)
+           ON CONFLICT(id) DO UPDATE SET
+             files_modified = excluded.files_modified,
+             tests_passed   = excluded.tests_passed,
+             branch         = excluded.branch,
+             pr_url         = excluded.pr_url,
+             llm_used       = excluded.llm_used
+        """,
+        record,
+    )
+    await _db.commit()
 
 
-async def db_save_files(task_id: str, files: list[dict]) -> None:
-    try:
-        async with aiosqlite.connect(DB_PATH) as db:
-            for f in files:
-                await db.execute(
-                    "INSERT INTO generated_files (task_id, file_path, content) VALUES (?,?,?)",
-                    (task_id, f["path"], f["content"]),
-                )
-            await db.commit()
-    except Exception:
-        pass
+async def db_save_file(task_id: str, rel_path: str, content: str) -> None:
+    if not _db:
+        return
+    await _db.execute(
+        "INSERT INTO generated_files (task_id, file_path, content, created_at) VALUES (?, ?, ?, ?)",
+        (task_id, rel_path, content, time.strftime("%Y-%m-%dT%H:%M:%S")),
+    )
+    await _db.commit()
 
 
-async def db_load_history() -> list[dict]:
-    try:
-        async with aiosqlite.connect(DB_PATH) as db:
-            db.row_factory = aiosqlite.Row
-            async with db.execute(
-                "SELECT * FROM task_history ORDER BY completed_at DESC LIMIT 50"
-            ) as cur:
-                return [dict(r) for r in await cur.fetchall()]
-    except Exception:
+async def db_store_memory(task_id: str, agent: str, memory_type: str, content: str) -> None:
+    if not _db:
+        return
+    await _db.execute(
+        "INSERT INTO agent_memory (task_id, agent, memory_type, content, created_at) VALUES (?, ?, ?, ?, ?)",
+        (task_id, agent, memory_type, content, time.strftime("%Y-%m-%dT%H:%M:%S")),
+    )
+    await _db.commit()
+
+
+async def db_recall_memories(agent: str, k: int = 5) -> list[str]:
+    if not _db:
         return []
+    async with _db.execute(
+        "SELECT content FROM agent_memory WHERE agent = ? ORDER BY id DESC LIMIT ?",
+        (agent, k),
+    ) as cur:
+        rows = await cur.fetchall()
+    return [r[0] for r in reversed(rows)]
 
 
-async def db_load_recent_logs(limit: int = 100) -> list[str]:
-    try:
-        async with aiosqlite.connect(DB_PATH) as db:
-            async with db.execute(
-                "SELECT message FROM logs ORDER BY id DESC LIMIT ?", (limit,)
-            ) as cur:
-                rows = await cur.fetchall()
-                return [r[0] for r in reversed(rows)]
-    except Exception:
+async def db_load_history() -> list[dict[str, Any]]:
+    if not _db:
         return []
+    async with _db.execute(
+        "SELECT * FROM task_history ORDER BY completed_at DESC LIMIT 50"
+    ) as cur:
+        rows = await cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def db_get_files(task_id: str) -> list[dict[str, Any]]:
+    if not _db:
+        return []
+    async with _db.execute(
+        "SELECT file_path, content, created_at FROM generated_files WHERE task_id = ?",
+        (task_id,),
+    ) as cur:
+        rows = await cur.fetchall()
+    return [dict(r) for r in rows]
 
 
 # ============================================================
@@ -295,29 +258,14 @@ def add_log(message: str) -> None:
     if len(SYSTEM_STATE["logs"]) > 200:
         SYSTEM_STATE["logs"] = SYSTEM_STATE["logs"][-100:]
     asyncio.create_task(_broadcast())
-    asyncio.create_task(db_save_log(entry))
-    if _use_discord():
-        asyncio.create_task(_discord_post(CH_ACTIVITY, entry))
+    asyncio.create_task(_post_to_channel(CH_ACTIVITY, entry))
+    asyncio.create_task(db_log(ts, entry))
 
 
 def set_agent_status(name: str, status: str, color: str) -> None:
     if name in SYSTEM_STATE["agents"]:
         SYSTEM_STATE["agents"][name] = {"status": status, "color": color}
     asyncio.create_task(_broadcast())
-
-
-def _use_discord() -> bool:
-    return MESSAGING_PROVIDER in ("discord", "both") and bool(DISCORD_TOKEN)
-
-
-def _use_whatsapp() -> bool:
-    return MESSAGING_PROVIDER in ("whatsapp", "both") and bool(TWILIO_ACCOUNT_SID)
-
-
-def _use_zeroclaw() -> bool:
-    """Active when MESSAGING_PROVIDER=zeroclaw, or ZEROCLAW_WEBHOOK_SECRET is set
-    (meaning ZeroClaw SOPs are configured to call this server)."""
-    return MESSAGING_PROVIDER == "zeroclaw" or bool(ZEROCLAW_WEBHOOK_SECRET)
 
 
 async def _broadcast() -> None:
@@ -333,897 +281,475 @@ async def _broadcast() -> None:
     _ws_clients.difference_update(dead)
 
 
-# ============================================================
-# 5. LLM ENGINE  (OpenAI API — GPT-4o or any compatible endpoint)
-# ============================================================
-
-AGENT_SYSTEM_PROMPTS: dict[str, str] = {
-    "Architect": (
-        "You are a principal software architect with 15+ years experience in distributed systems, "
-        "SaaS platforms, multi-tenant architecture, event-driven design, and AI-integrated products.\n\n"
-        "ALWAYS produce a structured Architecture Decision Record (ADR) document with these sections:\n"
-        "1. **Context** — Problem statement and constraints (3-5 sentences)\n"
-        "2. **Decision** — What tech stack and architectural patterns are chosen and WHY\n"
-        "3. **Files to create** — Full relative path + purpose for every file\n"
-        "4. **API contracts** — Method, path, request body (JSON schema), response body (JSON schema), error codes\n"
-        "5. **Data models** — Entities, fields with types, relationships, cardinality\n"
-        "6. **New dependencies** — pip/npm packages with version constraints and justification\n"
-        "7. **Security design** — Auth strategy (JWT/OAuth2/API key), RBAC model, PII fields, data exposure risks\n"
-        "8. **Scalability plan** — Caching strategy (Redis/CDN), async queues, DB indexes, horizontal scaling points\n"
-        "9. **Observability** — Metrics to expose (/metrics endpoint), log fields, trace spans, alert thresholds\n"
-        "10. **Fitness functions** — Measurable architecture compliance checks (e.g. p99 < 200ms, coverage >= 85%)\n\n"
-        "Tech stack selection rules:\n"
-        "- Default backend: FastAPI + PostgreSQL + Redis + Celery for async tasks\n"
-        "- Default frontend: Next.js 14 (App Router) + TypeScript + Tailwind CSS + shadcn/ui\n"
-        "- Auth: Supabase Auth or Auth0 (never roll-your-own crypto)\n"
-        "- If task requires real-time: WebSockets via FastAPI or SSE\n"
-        "- If task requires ML: FastAPI + Celery worker + model served via ONNX or vLLM\n\n"
-        "Be precise and technical. No filler. No vague statements. No TODOs in the design."
-    ),
-    "Frontend Dev": (
-        "You are a senior Next.js 14 / React 19 / TypeScript / Tailwind CSS engineer building production UIs.\n\n"
-        "For EACH file you produce, begin with the EXACT marker line (no extra spaces):\n"
-        "  // FILE: relative/path/to/component.tsx\n"
-        "Then write the COMPLETE file content — no truncation, no placeholders, no stub functions.\n\n"
-        "Architecture rules:\n"
-        "- Next.js App Router: use Server Components by default, 'use client' only for interactivity\n"
-        "- Co-locate: Component.tsx + Component.test.tsx + Component.stories.tsx in same folder\n"
-        "- State: Zustand stores in lib/stores/, React Query (TanStack Query v5) for all server state\n"
-        "- Forms: React Hook Form + Zod resolver — never uncontrolled forms\n"
-        "- API calls: typed fetch wrapper in lib/api.ts with proper error types\n\n"
-        "Code standards:\n"
-        "- Named exports ONLY (never `export default`)\n"
-        "- Strict TypeScript: no `any`, no `as any`, no `@ts-ignore`\n"
-        "- Tailwind: dark mode via `dark:` prefix, semantic color names in tailwind.config.ts\n"
-        "- Accessibility: WCAG 2.1 AA — aria-label, role, keyboard navigation, focus management\n"
-        "- Performance: dynamic imports for heavy components, next/image for all images, "
-        "next/font for fonts, avoid layout shift (set explicit width/height)\n"
-        "- Every async component wrapped in <Suspense> + skeleton fallback\n"
-        "- Every data-fetching component has: loading state, empty state, error state\n"
-        "- Error boundaries in app/error.tsx and per-route error.tsx\n"
-        "- Web Vitals targets: LCP < 2.5s, CLS < 0.1, INP < 200ms\n\n"
-        "Never output: TODO comments, placeholder logic, hardcoded credentials, console.log in prod code."
-    ),
-    "Backend Dev": (
-        "You are a senior FastAPI / Python 3.12 / PostgreSQL engineer building production-grade APIs.\n\n"
-        "For EACH file, begin with the EXACT marker line:\n"
-        "  # FILE: relative/path/to/module.py\n"
-        "Then write the COMPLETE file — no truncation, no placeholders, no pass stubs.\n\n"
-        "Architecture patterns (REQUIRED):\n"
-        "- Repository pattern: router → service → repository → database (strict layering)\n"
-        "- Dependency injection via FastAPI Depends() for DB sessions, auth, rate limiter\n"
-        "- Async SQLAlchemy 2.0 (async_sessionmaker, select().where()) — never sync ORM\n"
-        "- Background tasks: FastAPI BackgroundTasks for fire-and-forget, Celery for long-running\n"
-        "- CQRS where read/write patterns differ significantly\n\n"
-        "Code standards:\n"
-        "- Full PEP 695 type hints: every function, every class attribute, every variable\n"
-        "- Pydantic v2 models for ALL request/response schemas — no raw dicts from endpoints\n"
-        "- NEVER raw string formatting for SQL — SQLAlchemy expressions or parameterized queries ONLY\n"
-        "- JWT via `python-jose` or `authlib` — HS256/RS256 only, reject `alg: none`\n"
-        "- Rate limiting: `slowapi` on all public endpoints, stricter on auth endpoints\n"
-        "- HTTP client: `httpx.AsyncClient` with timeout and retry — NEVER `requests`\n"
-        "- Logging: `structlog` with JSON renderer — every log has trace_id, user_id, duration_ms\n"
-        "- Never expose stack traces to API clients — HTTPException with sanitized messages only\n"
-        "- Circuit breaker on external service calls (`circuitbreaker` library)\n"
-        "- Input validation: reject on first error, never trust Content-Type header alone\n"
-        "- Middleware order: CORS → tracing → auth → rate-limit → request-id injection\n\n"
-        "OpenTelemetry: instrument every endpoint with span name = 'http.{method}.{route}'.\n"
-        "Never output: TODO comments, hardcoded secrets, `print()` statements, sync DB calls."
-    ),
-    "Database Engineer": (
-        "You are a database architect expert in PostgreSQL 16, Alembic, Redis, and TimescaleDB.\n\n"
-        "For EACH file, begin with the EXACT marker line:\n"
-        "  -- FILE: migrations/NNNN_description.sql\n"
-        "For Alembic Python migrations:\n"
-        "  # FILE: alembic/versions/NNNN_description.py\n"
-        "Then write the COMPLETE SQL or Python migration — no truncation.\n\n"
-        "Schema design rules:\n"
-        "- All DDL is idempotent: `IF NOT EXISTS`, `CREATE OR REPLACE`\n"
-        "- Every table: id UUID DEFAULT gen_random_uuid() PRIMARY KEY, created_at TIMESTAMPTZ DEFAULT now(), "
-        "updated_at TIMESTAMPTZ DEFAULT now()\n"
-        "- Soft deletes: deleted_at TIMESTAMPTZ nullable + partial index WHERE deleted_at IS NULL\n"
-        "- Multi-tenant: tenant_id UUID NOT NULL on every table + RLS policy per table\n"
-        "- Foreign keys: always have matching index, ON DELETE strategy must be explicit\n"
-        "- Indexes: B-tree on FK columns and all WHERE/ORDER BY columns, GIN for full-text/JSONB, "
-        "partial indexes to reduce index size where applicable\n"
-        "- covering indexes: INCLUDE columns for hot query paths\n"
-        "- CHECK constraints for all enum-like columns\n"
-        "- Composite unique indexes for natural keys\n\n"
-        "Performance rules:\n"
-        "- Add EXPLAIN ANALYZE hints in comments for queries expected > 1000 rows\n"
-        "- Materialized views for expensive aggregations (OLAP patterns)\n"
-        "- Connection pooling: PgBouncer in transaction mode — no session-level state in queries\n"
-        "- Avoid N+1: use JOIN or batch loading — document it in schema comments\n\n"
-        "Migration safety rules:\n"
-        "- Never DROP COLUMN or RENAME in the same migration as data changes\n"
-        "- Always add NOT NULL columns with a DEFAULT or in two steps (add nullable → backfill → add constraint)\n"
-        "- Lock-safe: use CREATE INDEX CONCURRENTLY for large tables\n\n"
-        "Redis patterns: use typed key prefixes (user:{id}:session), set TTL on every key, "
-        "use RESP3 for pub/sub.\n\n"
-        "Comment every table and every non-obvious column with COMMENT ON."
-    ),
-    "QA Engineer": (
-        "You are a senior QA engineer specializing in pytest, Vitest, property-based testing, "
-        "and performance testing.\n\n"
-        "For EACH test file, begin with the EXACT marker line:\n"
-        "  # FILE: tests/test_feature_name.py\n"
-        "For TypeScript tests:\n"
-        "  // FILE: src/__tests__/feature.test.tsx\n"
-        "Then write the COMPLETE test code — every test must actually run and pass.\n\n"
-        "Test coverage requirements:\n"
-        "- Minimum 85% branch coverage on ALL new code paths\n"
-        "- Required for every feature:\n"
-        "  * Unit tests (pure logic, no I/O)\n"
-        "  * Integration tests (real DB via testcontainers or in-memory SQLite)\n"
-        "  * API contract tests (httpx AsyncClient + ASGI transport against real FastAPI app)\n"
-        "  * At least 1 property-based test using `hypothesis` for data-processing logic\n\n"
-        "Test patterns (REQUIRED):\n"
-        "- conftest.py: async fixtures for DB session, HTTP client, auth tokens, mocked external services\n"
-        "- Mock ALL external I/O: httpx (respx), SMTP (pytest-mock), S3 (moto), Stripe (responses)\n"
-        "- Time-sensitive tests: use `freezegun` to freeze datetime\n"
-        "- Async tests: `pytest-asyncio` with `asyncio_mode = 'auto'` in pyproject.toml\n"
-        "- FastAPI integration: `httpx.AsyncClient(app=app, base_url='http://test')` (ASGI transport)\n"
-        "- Test doubles hierarchy: prefer fakes over mocks, mocks over stubs\n\n"
-        "Test cases REQUIRED for every endpoint:\n"
-        "- 200 happy path (valid input, expected output schema)\n"
-        "- 422 validation failure (invalid types, missing required fields)\n"
-        "- 401/403 auth failure (missing token, wrong role)\n"
-        "- 409/404 business logic failure\n"
-        "- Concurrent request test (two requests racing for same resource)\n\n"
-        "Performance: add `pytest-benchmark` test for any endpoint expected to handle > 100 RPS.\n"
-        "TypeScript: Vitest + Testing Library + MSW for API mocking. Test user interactions, NOT implementation.\n\n"
-        "Never output: tests that always pass, tests that hit production APIs, sleep() in tests."
-    ),
-    "Security Analyst": (
-        "You are an AppSec engineer who reviews code against OWASP Top 10, OWASP ASVS Level 2, "
-        "and CWE Top 25.\n\n"
-        "REQUIRED output format (do not deviate):\n\n"
-        "## Findings\n"
-        "For each issue found:\n"
-        "  SEVERITY: CRITICAL | HIGH | MEDIUM | LOW\n"
-        "  CWE: CWE-XXX (include the CWE number)\n"
-        "  Location: filename:line_number\n"
-        "  Issue: one-line description\n"
-        "  Fix: exact code change, config, or header required\n\n"
-        "## Patches\n"
-        "For every CRITICAL or HIGH finding, output the COMPLETE corrected file:\n"
-        "  # FILE: path/to/fixed_file.py\n"
-        "  <full corrected file content — no truncation>\n\n"
-        "## Verdict\n"
-        "End with EXACTLY one of:\n"
-        "  SCAN: PASSED\n"
-        "  SCAN: FAILED\n\n"
-        "Automatic FAIL conditions (any one triggers FAILED):\n"
-        "- SQL injection (CWE-89): raw string formatting in queries\n"
-        "- XSS (CWE-79): unescaped user content in HTML/JS output\n"
-        "- Hardcoded secrets (CWE-798): API keys, passwords, tokens in source\n"
-        "- Missing auth/authz (CWE-862/863): unprotected endpoints or missing RBAC checks\n"
-        "- Insecure deserialization (CWE-502): pickle.loads on untrusted data\n"
-        "- SSRF (CWE-918): user-controlled URLs fetched without allowlist validation\n"
-        "- Path traversal (CWE-22): user-controlled file paths without sanitization\n"
-        "- JWT algorithm confusion: accepting `alg: none` or RS→HS confusion attacks\n"
-        "- Missing rate limiting on auth endpoints (login, register, password-reset)\n"
-        "- Mass assignment: Pydantic model with no field restrictions on user input\n"
-        "- Unvalidated redirects (CWE-601): user-controlled redirect URLs\n"
-        "- Missing security headers: CSP, HSTS, X-Content-Type-Options, X-Frame-Options\n"
-        "- Overly permissive CORS: allow_origins=['*'] in production\n\n"
-        "Additional checks:\n"
-        "- Dependency versions: flag any known-CVE packages (check against NVD)\n"
-        "- Secrets in environment: verify .env files are in .gitignore\n"
-        "- Supply chain: flag unpinned dependencies (no version = supply chain risk)\n"
-        "- Container: check Dockerfile for running as root, secrets in ENV layers\n"
-        "- Logging hygiene: ensure PII, passwords, tokens are never logged\n\n"
-        "Output SCAN: PASSED only if ZERO CRITICAL or HIGH findings remain after patches."
-    ),
-    "DevOps Engineer": (
-        "You are a senior DevOps/Platform engineer specializing in Docker, Kubernetes, "
-        "GitHub Actions, Terraform, and cloud-native observability.\n\n"
-        "For EACH config file, begin with the EXACT marker line:\n"
-        "  # FILE: .github/workflows/ci.yml\n"
-        "Then write the COMPLETE file — no truncation, no placeholder steps.\n\n"
-        "Always produce ALL of the following:\n"
-        "1. Dockerfile (multi-stage: builder + distroless/alpine runtime, non-root USER 65534)\n"
-        "2. docker-compose.yml (full local dev stack: app + postgres + redis + any queues, "
-        "with resource limits: mem_limit + cpus)\n"
-        "3. .github/workflows/ci.yml (stages: lint → type-check → test → security → build → push → deploy)\n"
-        "4. .dockerignore (exclude .git, __pycache__, .env*, node_modules, .pytest_cache)\n"
-        "5. Makefile (targets: dev, test, lint, build, push, deploy, clean)\n"
-        "6. k8s/deployment.yaml (Deployment + Service + HPA + PodDisruptionBudget + NetworkPolicy)\n"
-        "7. k8s/configmap.yaml + k8s/secret.yaml (sealed-secrets or external-secrets pattern)\n"
-        "8. monitoring/prometheus-rules.yaml (alert rules: high error rate, high latency, pod restarts)\n\n"
-        "Standards:\n"
-        "- Pin ALL image versions with SHA digest (never :latest)\n"
-        "- Health checks: readinessProbe + livenessProbe + startupProbe on every K8s container\n"
-        "- Resource requests AND limits on every container (no unbounded resource usage)\n"
-        "- Secrets via external-secrets operator or sealed-secrets — never baked into images or ConfigMaps\n"
-        "- CI: fail fast (lint before test, SAST before build, test before deploy)\n"
-        "- CI: cache pip/npm/docker layers to minimize build time\n"
-        "- Rollout strategy: RollingUpdate with maxSurge=1, maxUnavailable=0 (zero-downtime deploy)\n"
-        "- HPA: scale on CPU (70%) AND custom metrics (queue depth, RPS) if applicable\n"
-        "- NetworkPolicy: default deny-all, explicit allow only what's needed\n"
-        "- /metrics endpoint: expose Prometheus metrics (FastAPI: prometheus-fastapi-instrumentator)\n"
-        "- Grafana dashboard JSON: include in monitoring/ with panels for RPS, p99 latency, error rate\n\n"
-        "Write complete, deployable configurations that work against a standard K8s cluster as-is."
-    ),
-    "Project Manager": (
-        "You are an AI project manager writing a concise stakeholder delivery report.\n\n"
-        "Structure your report EXACTLY as follows (every section required):\n\n"
-        "## Acceptance Criteria Checklist\n"
-        "List each requirement from the original task and mark [x] complete or [ ] incomplete.\n\n"
-        "## Delivered\n"
-        "Bullet list: what was built, what files were created, what changed.\n\n"
-        "## Quality Gate\n"
-        "- Test coverage: X% (gate: 85%)\n"
-        "- Security scan: PASSED | FAILED\n"
-        "- Syntax validation: PASSED | N/A\n"
-        "- Known gaps or tech debt (be specific, no 'could be improved' vagueness)\n\n"
-        "## Deployment Status\n"
-        "- Branch: feat/xxxx\n"
-        "- PR: <url or 'not created — GITHUB_TOKEN not configured'>\n"
-        "- Files generated: N\n"
-        "- Docker build: OK | FAILED | SKIPPED\n"
-        "- Kubernetes manifests: included | not applicable\n\n"
-        "## SLA Commitments\n"
-        "Based on the architecture, state expected: p99 latency target, uptime SLO, "
-        "max concurrent users before scale-out is needed.\n\n"
-        "## Risks & Recommended Follow-up Orders\n"
-        "- List what is NOT done (honest gaps)\n"
-        "- Prioritized list of recommended follow-up orders with brief rationale\n"
-        "- One-line rollback plan if deployment fails\n\n"
-        "Keep under 600 words. Be direct. No filler. No corporate speak."
-    ),
-}
-
-
-
-
-# Per-agent temperature tuning:
-#   Low  (0.05-0.15) → deterministic code & SQL
-#   Mid  (0.2-0.35)  → analysis & review tasks
-#   High (0.4-0.5)   → creative design & planning
-AGENT_TEMPERATURES: dict[str, float] = {
-    "Architect":         0.45,  # creative exploration for design
-    "Frontend Dev":      0.15,  # deterministic component code
-    "Backend Dev":       0.10,  # very deterministic API/service code
-    "Database Engineer": 0.05,  # maximum determinism for SQL/migrations
-    "QA Engineer":       0.10,  # deterministic test code
-    "Security Analyst":  0.20,  # structured review with some flexibility
-    "DevOps Engineer":   0.10,  # deterministic config files
-    "Project Manager":   0.35,  # moderate for prose reports
-}
-
-
-def _has_any_llm_key() -> bool:
-    """Return True if at least one LLM provider API key is configured."""
-    return bool(
-        OPENAI_API_KEY
-        or ANTHROPIC_API_KEY
-        or GOOGLE_API_KEY
-        or GROQ_API_KEY
-        or MISTRAL_API_KEY
-        or TOGETHERAI_API_KEY
-        or AWS_ACCESS_KEY_ID
-        or LLM_MODEL.startswith("ollama/")   # Ollama is keyless
-        or LLM_PROVIDER in ("copilot", "cursor")
-    )
-
-
-async def _call_copilot_bridge(agent: str, system: str, user: str, temperature: float) -> str:
-    """Forward an agent LLM call to the local VS Code Copilot Bridge extension."""
-    import httpx
-    payload = {
-        "agent": agent,
-        "system": system,
-        "user": user,
-        "temperature": temperature,
-    }
-    try:
-        async with httpx.AsyncClient(timeout=600.0) as client:
-            resp = await client.post(f"{COPILOT_BRIDGE_URL}/chat", json=payload)
-            resp.raise_for_status()
-            data = resp.json()
-            return data.get("content", "")
-    except Exception as exc:
-        add_log(f"[{agent}][CopilotBridge] Error: {exc} -- falling back to OpenAI")
-        return ""  # empty string triggers OpenAI fallback in llm_call
-
-
-async def llm_call(agent: str, user_message: str, *, temperature: float | None = None) -> str:
-    """
-    Call the configured LLM for the given agent using LiteLLM.
-
-    LiteLLM routes to the correct provider based on LLM_MODEL prefix:
-      gpt-4o                    -> OpenAI (OPENAI_API_KEY)
-      claude-opus-4             -> Anthropic (ANTHROPIC_API_KEY)
-      gemini/gemini-2.5-pro     -> Google Gemini (GOOGLE_API_KEY)
-      groq/llama-3.3-70b        -> Groq (GROQ_API_KEY)
-      mistral/mistral-large     -> Mistral (MISTRAL_API_KEY)
-      ollama/llama3.3           -> Ollama local (OLLAMA_HOST, no key)
-      bedrock/claude-3-5-sonnet -> AWS Bedrock (AWS_* vars)
-      openai/<model>            -> any OpenAI-compatible endpoint (OPENAI_BASE_URL)
-
-    LLM_PROVIDER=copilot|cursor -> routes through VS Code bridge first.
-    LLM_PROVIDER=simulate      -> returns placeholder, no LLM call.
-    """
-    import os as _os
-    temp = temperature if temperature is not None else AGENT_TEMPERATURES.get(agent, 0.2)
-    system_prompt = AGENT_SYSTEM_PROMPTS.get(agent, "You are a helpful AI.")
-
-    # ── Copilot / Cursor bridge ──────────────────────────────────────────────
-    if LLM_PROVIDER in ("copilot", "cursor"):
-        add_log(f"[{agent}] -> Copilot Bridge ({COPILOT_BRIDGE_URL})")
-        result = await _call_copilot_bridge(agent, system_prompt, user_message, temp)
-        if result:
-            return result
-        add_log(f"[{agent}] Copilot bridge unreachable, falling back to {LLM_MODEL}...")
-
-    # ── Simulation ──────────────────────────────────────────────────────────
-    if LLM_PROVIDER == "simulate" or not _has_any_llm_key():
-        add_log(f"[{agent}] Simulating ({LLM_MODEL} / no valid API key configured).")
-        await asyncio.sleep(0.2)
-        slug = agent.lower().replace(" ", "_")
-        return (
-            f"[SIMULATED]\n"
-            f"# FILE: workspace/{slug}/main.py\n"
-            f"# {agent} placeholder for: {user_message[:120]}\n"
-            f"def placeholder(): pass\n"
-        )
-
-    # ── LiteLLM universal call ───────────────────────────────────────────────
-    try:
-        import litellm  # type: ignore
-        litellm.drop_params = True          # silently ignore unsupported params
-        litellm.set_verbose = False
-
-        # Inject per-provider env vars that LiteLLM expects
-        if GOOGLE_API_KEY:
-            _os.environ.setdefault("GEMINI_API_KEY", GOOGLE_API_KEY)
-        if OLLAMA_HOST:
-            _os.environ.setdefault("OLLAMA_API_BASE", OLLAMA_HOST)
-
-        # Extra kwargs for OpenAI-compatible custom endpoints
-        extra: dict[str, Any] = {}
-        if OPENAI_BASE_URL and (LLM_MODEL.startswith("openai/") or not any(
-            LLM_MODEL.startswith(p)
-            for p in ("claude", "gemini/", "groq/", "mistral/", "ollama/",
-                      "together_ai/", "bedrock/", "anthropic.")
-        )):
-            extra["api_base"] = OPENAI_BASE_URL
-
-        add_log(f"[{agent}] -> {LLM_MODEL} (temp={temp:.2f})")
-        resp = await litellm.acompletion(
-            model=LLM_MODEL,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user",   "content": user_message},
-            ],
-            max_tokens=OPENAI_MAX_TOKENS,
-            temperature=temp,
-            **extra,
-        )
-        content = resp.choices[0].message.content or ""
-        add_log(f"[{agent}] <- {LLM_MODEL} ({len(content)} chars)")
-        return content
-    except Exception as exc:
-        add_log(f"[{agent}] LLM error ({LLM_MODEL}): {exc}")
-        return f"[LLM ERROR] {exc}"
-
-def parse_files_from_llm(output: str) -> list[dict]:
-    """
-    Extract FILE: path blocks from LLM output.
-    Supports multiple marker styles emitted by different agents:
-      // FILE: path/to/file.tsx        (Frontend Dev)
-      # FILE: path/to/file.py          (Backend Dev, QA, DevOps)
-      -- FILE: migrations/0001_x.sql   (Database Engineer)
-      FILE: path/to/file.py            (bare fallback)
-    """
-    # Primary: comment-prefixed markers (// # --)
-    primary = re.compile(
-        r"(?://|#|--)" + r"\s+" + r"FILE:\s+(.+?)" + "\n" + r"(.*?)(?=(?://|#|--)" + r"\s+" + r"FILE:|\Z)",
-        re.DOTALL,
-    )
-    files = [
-        {"path": m.group(1).strip(), "content": m.group(2).strip()}
-        for m in primary.finditer(output)
-    ]
-    if files:
-        return [f for f in files if f["path"] and f["content"]]
-
-    # Fallback: bare FILE: markers (some models omit the comment prefix)
-    fallback = re.compile(
-        r"^FILE:" + r"\s+" + r"(.+?)" + "\n" + r"(.*?)(?=^FILE:|\Z)",
-        re.DOTALL | re.MULTILINE,
-    )
-    files = [
-        {"path": m.group(1).strip(), "content": m.group(2).strip()}
-        for m in fallback.finditer(output)
-    ]
-    if files:
-        return [f for f in files if f["path"] and f["content"]]
-
-    # Last resort: markdown code blocks with filename on first line
-    md_block = re.compile(
-        r"```(?:python|typescript|tsx?|sql|yaml|dockerfile|bash|sh)?" + r"\s+([\w./\-]+\.\w+)" + "\n" + r"(.*?)```",
-        re.DOTALL | re.IGNORECASE,
-    )
-    files = [
-        {"path": m.group(1).strip(), "content": m.group(2).strip()}
-        for m in md_block.finditer(output)
-    ]
-    return [f for f in files if f["path"] and f["content"]]
-
-async def memory_store(
-    task_id: str,
-    agent: str,
-    category: str,
-    content: str,
-    *,
-    tags: str = "",
-) -> None:
-    """
-    Persist a key agent insight for injection into future pipeline runs.
-    `tags` is a comma-separated string of searchable labels (e.g. 'auth,jwt,fastapi').
-    Content is capped at 1200 chars (up from 600) to preserve more context.
-    """
-    # Build tagged content prefix for richer recall
-    tagged = f"[tags:{tags}] {content}" if tags else content
-    try:
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute(
-                "INSERT INTO agent_memory (task_id, agent, category, content) VALUES (?,?,?,?)",
-                (task_id, agent, category, tagged[:1200]),
-            )
-            await db.commit()
-    except Exception:
-        pass
-
-
-async def memory_recall(query: str, limit: int = 5) -> list[str]:
-    """Recall relevant past memories using keyword search."""
-    keywords = [w.lower() for w in query.split() if len(w) > 4][:6]
-    if not keywords:
-        return []
-    try:
-        async with aiosqlite.connect(DB_PATH) as db:
-            db.row_factory = aiosqlite.Row
-            where = " OR ".join("LOWER(content) LIKE ?" for _ in keywords)
-            params = [f"%{kw}%" for kw in keywords]
-            async with db.execute(
-                f"SELECT agent, category, content FROM agent_memory "
-                f"WHERE {where} ORDER BY id DESC LIMIT ?",
-                params + [limit],
-            ) as cur:
-                rows = await cur.fetchall()
-                return [f"[{r['agent']}/{r['category']}] {r['content'][:200]}" for r in rows]
-    except Exception:
-        return []
-
-
-# ============================================================
-# 5.6  REAL TOOL EXECUTION  (pytest, bandit, npm audit, docker)
-# ============================================================
-
-def _write_files_to_workspace(files: list[dict]) -> None:
-    """Write generated files to GIT_WORKSPACE immediately so real tools can run on them."""
-    for f in files:
+async def _post_to_channel(channel_id: int, message: str) -> None:
+    if not channel_id or not bot.is_ready():
+        return
+    ch = bot.get_channel(channel_id)
+    if ch:
         try:
-            dest = GIT_WORKSPACE / f["path"].lstrip("/")
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(f["content"], encoding="utf-8")
-        except Exception:
+            await ch.send(message[:2000])
+        except discord.HTTPException:
             pass
 
 
+# ============================================================
+# 5. LLM CALLER
+# ============================================================
 
-def _build_file_manifest(files: list[dict]) -> str:
-    """
-    Build a compact file manifest for cross-agent context injection.
-    Lists each generated file with its path, line count, and a preview line.
-    Keeps total output under ~2000 chars regardless of how many files.
-    """
-    if not files:
-        return "  (no files generated yet)"
-    lines: list[str] = []
-    for f in files[:40]:  # cap at 40 entries to stay within token budget
-        path = f.get("path", "?")
-        content = f.get("content", "")
-        loc = len(content.splitlines())
-        # First non-blank, non-comment line as preview
-        preview = next(
-            (ln.strip() for ln in content.splitlines()
-             if ln.strip() and not ln.strip().startswith(("#", "//", "--", "/*"))),
-            "",
-        )[:80]
-        lines.append(f"  {path}  ({loc} lines)  →  {preview}")
-    if len(files) > 40:
-        lines.append(f"  ... and {len(files) - 40} more files")
-    return "\n".join(lines)
+_BASE_OUTPUT_FORMAT = """
+Respond with a single valid JSON object with exactly these keys:
+{
+  "summary": "<concise description of what you did>",
+  "files": [
+    {"path": "<relative path from workspace root>", "content": "<full file content>"},
+    ...
+  ],
+  "notes": ["<important decision or finding for team memory>", ...]
+}
+Output raw JSON only — no markdown fences, no preamble.
+"""
 
 
-async def _validate_python_files(files: list[dict]) -> list[tuple[str, str]]:
-    """
-    Syntax-check every generated .py file using py_compile.
-    Returns a list of (path, error_message) for files that fail.
-    Fast: runs in-process, no subprocess overhead.
-    """
-    import py_compile
-    import tempfile
-
-    errors: list[tuple[str, str]] = []
-    for f in files:
-        if not f.get("path", "").endswith(".py"):
-            continue
-        content = f.get("content", "")
-        tmp_path = ""
-        try:
-            with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".py", delete=False, encoding="utf-8"
-            ) as tmp:
-                tmp.write(content)
-                tmp_path = tmp.name
-            py_compile.compile(tmp_path, doraise=True)
-        except py_compile.PyCompileError as exc:
-            errors.append((f["path"], str(exc)))
-        except Exception as exc:
-            errors.append((f["path"], f"[validation error] {exc}"))
-        finally:
-            if tmp_path:
-                try:
-                    Path(tmp_path).unlink(missing_ok=True)
-                except Exception:
-                    pass
-    return errors
-
-
-async def _run_subprocess(cmd: list[str], cwd: Path, timeout: int = 60) -> tuple[int, str]:
-    """Run a subprocess safely (no shell=True — injection-safe) and return (returncode, output)."""
+async def call_llm(
+    agent_name: str,
+    system_prompt: str,
+    user_message: str,
+    temperature: float = 0.4,
+) -> str:
+    """Call LiteLLM with the configured model. Gracefully falls back to simulation."""
+    if not LLM_ENABLED:
+        await asyncio.sleep(1)
+        return json.dumps({
+            "summary": f"[SIMULATION] {agent_name} — set OPENAI_API_KEY for real LLM output.",
+            "files": [],
+            "notes": [f"{agent_name} ran in simulation mode."],
+        })
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            cwd=str(cwd),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
+        import litellm  # lazy import — only when API key present
+        response = await litellm.acompletion(
+            model=LLM_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
+            ],
+            max_tokens=OPENAI_MAX_TOKENS,
+            temperature=temperature,
+            response_format={"type": "json_object"},
         )
-        try:
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        except asyncio.TimeoutError:
-            proc.kill()
-            return 1, f"[TIMEOUT after {timeout}s]"
-        return proc.returncode or 0, stdout.decode(errors="replace")[:2000]
-    except FileNotFoundError as exc:
-        return 1, f"[TOOL NOT FOUND — install it first: {exc}]"
+        return response.choices[0].message.content or ""
     except Exception as exc:
-        return 1, f"[SUBPROCESS ERROR: {exc}]"
+        add_log(f"[LLM][ERROR] {agent_name}: {exc}")
+        raise
 
 
-async def run_tests_real(workspace: Path) -> dict:
-    """
-    Run pytest (Python) and/or vitest/jest (JS/TS) on the workspace.
-    Returns {"passed": bool, "coverage": int, "output": str}.
-    """
-    results: dict = {"passed": False, "coverage": 0, "output": ""}
-    combined = ""
-    any_runner = False
-
-    # Python — pytest + coverage
-    py_tests = list(workspace.rglob("test_*.py")) + list(workspace.rglob("*_test.py"))
-    if py_tests:
-        any_runner = True
-        code, out = await _run_subprocess(
-            ["python", "-m", "pytest", "--tb=short", "-q", "--no-header",
-             "--cov=.", "--cov-report=term-missing"],
-            workspace, timeout=120,
-        )
-        combined += f"=== pytest ===\n{out}\n"
-        cov = re.search(r"TOTAL\s+\d+\s+\d+\s+(\d+)%", out)
-        if cov:
-            results["coverage"] = int(cov.group(1))
-        if code == 0:
-            results["passed"] = True
-
-    # JavaScript / TypeScript — vitest or jest
-    if (workspace / "package.json").exists():
-        any_runner = True
-        code, out = await _run_subprocess(
-            ["npm", "test", "--", "--run", "--reporter=verbose"],
-            workspace, timeout=120,
-        )
-        combined += f"=== vitest/jest ===\n{out}\n"
-        if code == 0 and not py_tests:
-            results["passed"] = True
-
-    if not any_runner:
-        combined = "[No test runner detected in workspace — skipping real execution]"
-        results["passed"] = True   # don't block pipeline if no infra yet
-
-    results["output"] = combined[:2000]
-    return results
-
-
-async def run_security_real(workspace: Path) -> dict:
-    """
-    Run bandit (Python static analysis) and npm audit (JS dependency vuln scan).
-    Returns {"python_issues": str, "npm_issues": str, "output": str}.
-    """
-    results: dict = {"python_issues": "not checked", "npm_issues": "not checked", "output": ""}
-    combined = ""
-
-    # bandit — Python SAST
-    if list(workspace.rglob("*.py")):
-        code, out = await _run_subprocess(
-            ["python", "-m", "bandit", "-r", ".", "-ll", "-f", "txt", "--exit-zero"],
-            workspace, timeout=60,
-        )
-        combined += f"=== bandit ===\n{out}\n"
-        highs = len(re.findall(r"Severity: (High|Critical)", out, re.IGNORECASE))
-        results["python_issues"] = f"{highs} HIGH/CRITICAL" if highs else "clean"
-
-    # npm audit — JS dependency vulnerabilities
-    if (workspace / "package.json").exists():
-        code, out = await _run_subprocess(
-            ["npm", "audit", "--audit-level=high", "--json"],
-            workspace, timeout=60,
-        )
-        combined += f"=== npm audit ===\n{out[:800]}\n"
-        import json as _json
-        try:
-            audit_data = _json.loads(out)
-            vulns = audit_data.get("metadata", {}).get("vulnerabilities", {})
-            high_total = vulns.get("high", 0) + vulns.get("critical", 0)
-            results["npm_issues"] = f"{high_total} HIGH/CRITICAL" if high_total else "clean"
-        except Exception:
-            results["npm_issues"] = "parse error (non-JSON output)"
-
-    results["output"] = combined[:2000]
-    return results
-
-
-async def docker_build(workspace: Path, task_id: str) -> tuple[bool, str]:
-    """Build a Docker image from the workspace Dockerfile."""
-    tag = f"ai-dev-team/{task_id}:latest"
-    code, out = await _run_subprocess(
-        ["docker", "build", "-t", tag, "."],
-        workspace, timeout=300,
-    )
-    return code == 0, out[-500:]
-
-
-# ============================================================
-# 5.7  TASK DECOMPOSITION  (break complex tasks into phases)
-# ============================================================
-
-async def decompose_task(task: str) -> list[str]:
-    """
-    Simple / narrow tasks   -> returns [task] (single phase, skip LLM call).
-    Complex / broad tasks   -> asks LLM to split into <= MAX_SUBTASKS ordered
-                               implementation phases, each self-contained.
-    """
-    simple_starters = ("add ", "fix ", "update ", "create ", "write ", "refactor ", "rename ", "delete ")
-    if len(task.split()) <= 8 and any(task.lower().startswith(s) for s in simple_starters):
-        return [task]
-
-    if not OPENAI_API_KEY:
-        return [task]   # simulation mode — skip the extra LLM call
-
-    prompt = (
-        f"Break this software task into at most {MAX_SUBTASKS} ordered implementation phases. "
-        f"Each phase is a self-contained unit of work (e.g. 'Auth service', 'Dashboard UI').\n"
-        f"Output ONLY a numbered list. No explanations, no preamble.\n\n"
-        f"Task: {task}"
-    )
+def _parse_agent_response(raw: str) -> dict[str, Any]:
+    """Parse JSON from LLM response, stripping markdown fences if present."""
+    text = raw.strip()
+    text = re.sub(r"^```[a-z]*\n?", "", text)
+    text = re.sub(r"\n?```$", "", text)
     try:
-        raw = await llm_call("Project Manager", prompt)
-        phases = []
-        for line in raw.splitlines():
-            line = line.strip()
-            if line and line[0].isdigit() and "." in line[:4]:
-                phase = re.sub(r"^\d+\.\s*", "", line).strip()
-                if phase:
-                    phases.append(phase)
-        return phases[:MAX_SUBTASKS] if phases else [task]
-    except Exception:
-        return [task]
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return {"summary": text, "files": [], "notes": []}
 
 
 # ============================================================
-# 6. GIT ENGINE  (subprocess — no extra dep, avoids shell injection)
+# 5.1  FILE & GIT UTILITIES
 # ============================================================
 
-def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
-    """Run a git command using list args to prevent shell injection."""
-    return subprocess.run(
-        ["git"] + args,
-        cwd=str(cwd),
-        capture_output=True,
-        text=True,
-        timeout=30,
+async def write_workspace_file(task_id: str, rel_path: str, content: str) -> None:
+    """Write a generated file to the workspace dir and persist to DB."""
+    abs_path = os.path.join(GIT_WORKSPACE, rel_path)
+    os.makedirs(os.path.dirname(abs_path) or ".", exist_ok=True)
+    with open(abs_path, "w", encoding="utf-8") as fh:
+        fh.write(content)
+    await db_save_file(task_id, rel_path, content)
+    add_log(f"[FILE] ✍  {rel_path}")
+
+
+def _read_project_architecture() -> str:
+    """Read the living project architecture document from the workspace (if it exists)."""
+    arch_path = os.path.join(GIT_WORKSPACE, "docs", "PROJECT_ARCHITECTURE.md")
+    if os.path.exists(arch_path):
+        with open(arch_path, encoding="utf-8") as fh:
+            return fh.read()
+    return ""
+
+
+async def _run_subprocess(cmd: list[str], cwd: str | None = None) -> tuple[int, str, str]:
+    """Run a subprocess without shell=True. Returns (returncode, stdout, stderr)."""
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        cwd=cwd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    out, err = await proc.communicate()
+    return (
+        proc.returncode or 0,
+        out.decode("utf-8", errors="replace"),
+        err.decode("utf-8", errors="replace"),
     )
 
 
-def _git_write_files(files: list[dict], workspace: Path) -> None:
-    workspace.mkdir(parents=True, exist_ok=True)
-    for f in files:
-        fpath = workspace / f["path"]
-        fpath.parent.mkdir(parents=True, exist_ok=True)
-        fpath.write_text(f["content"], encoding="utf-8")
+# ── Infrastructure file detection ─────────────────────────────────────────────
+# Files matching these patterns require a dedicated human review gate because
+# they can affect live infrastructure, cloud spend, or security posture.
+_INFRA_PATTERNS: tuple[str, ...] = (
+    ".github/workflows/",
+    "k8s/",
+    "terraform/",
+    "cdk/",
+    "Dockerfile",
+    "docker-compose",
+    "helmfile",
+    "charts/",
+    "monitoring/",
+)
 
 
-async def git_commit_and_push(task_id: str, task: str, files: list[dict]) -> tuple[str | None, str]:
+def _detect_infra_files(file_paths: list[str]) -> list[str]:
+    """Return any paths that match infrastructure patterns (case-insensitive)."""
+    return [
+        p for p in file_paths
+        if any(pat.lower() in p.lower() for pat in _INFRA_PATTERNS)
+    ]
+
+
+async def git_init_workspace() -> None:
+    """Ensure GIT_WORKSPACE exists and contains an initialised git repo."""
+    os.makedirs(GIT_WORKSPACE, exist_ok=True)
+    if not os.path.isdir(os.path.join(GIT_WORKSPACE, ".git")):
+        await _run_subprocess(["git", "init"], cwd=GIT_WORKSPACE)
+        await _run_subprocess(["git", "checkout", "-b", "main"], cwd=GIT_WORKSPACE)
+        add_log(f"[GIT] Initialised repo at {GIT_WORKSPACE}")
+
+
+async def git_commit_push(
+    task_id: str,
+    branch: str,
+    file_paths: list[str] | None = None,
+) -> str | None:
+    """Create a branch, commit all staged files, push, and optionally open a PR.
+
+    Args:
+        task_id:    Short task UUID used for commit message and PR title.
+        branch:     Feature branch name (e.g. 'feat/abc123').
+        file_paths: Relative paths of all generated files — used to detect
+                    infrastructure files and trigger the infra review gate.
     """
-    Write generated files to GIT_WORKSPACE, commit on feature branch.
-    Push + open GitHub PR if GITHUB_TOKEN and GITHUB_REPO are configured.
-    Returns (pr_url | None, branch_name).
-    """
-    workspace = GIT_WORKSPACE
-    workspace.mkdir(parents=True, exist_ok=True)
+    ws = GIT_WORKSPACE
+    if not os.path.isdir(os.path.join(ws, ".git")):
+        return None
+    for cmd in [
+        ["git", "-C", ws, "checkout", "-b", branch],
+        ["git", "-C", ws, "add", "."],
+        ["git", "-C", ws, "commit", "-m", f"feat: {task_id} — CoDevx automated delivery"],
+    ]:
+        rc, out, err = await _run_subprocess(cmd)
+        if rc != 0:
+            add_log(f"[GIT][WARN] {' '.join(cmd[-2:])}: {(err or out)[:200]}")
 
-    if not (workspace / ".git").exists():
-        _git(["init"], workspace)
-        _git(["config", "user.email", "ai-dev-team@local"], workspace)
-        _git(["config", "user.name", "AI Dev Team"], workspace)
-        _git(["commit", "--allow-empty", "-m", "chore: init workspace"], workspace)
-
-    branch = f"feat/{task_id}"
-    _git(["checkout", "-B", "main"], workspace)
-    _git(["checkout", "-b", branch], workspace)
-
-    # Strip shell metacharacters from commit message
-    safe_task = re.sub(r"[`$\\\"'<>|;&]", "", task)[:72]
-    _git_write_files(files, workspace)
-    _git(["add", "."], workspace)
-    _git(["commit", "-m", f"feat: {safe_task} [{task_id}]"], workspace)
-    add_log(f"[DevOps] Committed {len(files)} file(s) to branch {branch}")
+    infra_files = _detect_infra_files(file_paths or [])
+    if infra_files:
+        add_log(
+            f"[GIT][INFRA GATE] ⚠️  {len(infra_files)} infra file(s) detected — "
+            "PR will require dedicated infrastructure review before merge."
+        )
 
     pr_url: str | None = None
     if GITHUB_TOKEN and GITHUB_REPO:
-        try:
-            import httpx
-            # Token stays in memory only, never logged
-            remote = f"https://x-token:{GITHUB_TOKEN}@github.com/{GITHUB_REPO}.git"
-            _git(["remote", "set-url", "origin", remote], workspace)
-            _git(["push", "-u", "origin", branch], workspace)
-
-            async with httpx.AsyncClient(timeout=15) as client:
-                r = await client.post(
-                    f"https://api.github.com/repos/{GITHUB_REPO}/pulls",
-                    headers={
-                        "Authorization": f"Bearer {GITHUB_TOKEN}",
-                        "Accept": "application/vnd.github+json",
-                        "X-GitHub-Api-Version": "2022-11-28",
-                    },
-                    json={
-                        "title": f"feat: {safe_task} [{task_id}]",
-                        "head": branch,
-                        "base": "main",
-                        "body": (
-                            f"**Automated PR by AI Dev Team**\n\n"
-                            f"**Task:** {task}\n**Task ID:** `{task_id}`\n\n"
-                            "---\n*Generated by Agent Mesh v3.0*"
-                        ),
-                    },
-                )
-            if r.status_code == 201:
-                pr_url = r.json().get("html_url", "")
-                add_log(f"[DevOps] PR opened: {pr_url}")
-            else:
-                add_log(f"[DevOps] GitHub PR returned {r.status_code}: {r.text[:200]}")
-        except Exception as exc:
-            add_log(f"[DevOps] GitHub error: {exc}")
-
-    return pr_url, branch
+        remote = f"https://x-access-token:{GITHUB_TOKEN}@github.com/{GITHUB_REPO}.git"
+        rc, _, err = await _run_subprocess(["git", "-C", ws, "push", "-u", remote, branch])
+        if rc != 0:
+            add_log(f"[GIT][WARN] push failed: {err[:200]}")
+        else:
+            pr_url = await _create_github_pr(branch, task_id, infra_files, file_paths or [])
+    return pr_url
 
 
-# ============================================================
-# 7. WHATSAPP  (Twilio REST — sync SDK wrapped in executor)
-# ============================================================
+async def _create_github_pr(
+    branch: str,
+    task_id: str,
+    infra_files: list[str],
+    all_file_paths: list[str],
+) -> str | None:
+    """Open a pull request via the GitHub REST API.
 
-def _twilio_send_sync(to: str, body: str) -> None:
-    from twilio.rest import Client
-    Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN).messages.create(
-        from_=TWILIO_WA_FROM, to=to, body=body[:1600]
-    )
-
-
-async def wa_send(to: str, body: str) -> None:
-    if not _use_whatsapp() or not to:
-        return
-    try:
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, _twilio_send_sync, to, body)
-    except Exception as exc:
-        add_log(f"[WhatsApp] Send failed: {exc}")
-
-
-async def wa_send_plan(task: str) -> None:
-    if not MANAGER_WHATSAPP:
-        return
-    text = (
-        "AI Dev Team -- Execution Plan\n\n"
-        f"Order: {task}\n\n"
-        "Pipeline:\n"
-        "1. Architect -- Design\n"
-        "2. Frontend Dev + Backend Dev (parallel)\n"
-        "3. Database Engineer -- Schema\n"
-        "4. QA Engineer -- Tests (80% gate)\n"
-        "5. Security Analyst -- OWASP scan\n"
-        "6. DevOps Engineer -- Docker & CI/CD\n"
-        "7. Project Manager -- Delivery report\n\n"
-        "Reply 'approve' to execute or 'reject' to cancel."
-    )
-    _wa_pending[MANAGER_WHATSAPP] = task
-    await wa_send(MANAGER_WHATSAPP, text)
-
-
-
-
-# ============================================================
-# 7.5  ZEROCLAW GATEWAY  (https://github.com/zeroclaw-labs/zeroclaw)
-# ============================================================
-# ZeroClaw is a Rust-based personal AI assistant daemon that connects to 20+
-# messaging channels natively (Discord, WhatsApp, Telegram, Slack, Signal …).
-# When MESSAGING_PROVIDER=zeroclaw, agent_mesh no longer manages discord.py or
-# Twilio directly — ZeroClaw's SOP (Standard Operating Procedure) webhooks drive
-# the pipeline instead.
-#
-# Security: every inbound ZeroClaw webhook is verified with HMAC-SHA256.
-# ─────────────────────────────────────────────────────────────────────────────
-
-class ZeroClawPayload(BaseModel):
-    action: str = "order"    # order | approve | reject
-    task: str = ""
-    channel: str = ""
-    sender: str = ""
-    reply_url: str = ""      # ZeroClaw SOP callback URL for async progress/result
-
-
-def _verify_zeroclaw_sig(body: bytes, sig_header: str) -> bool:
-    """HMAC-SHA256 signature verification for inbound ZeroClaw SOP webhooks.
-    If ZEROCLAW_WEBHOOK_SECRET is not set, verification is skipped (dev mode).
+    When infrastructure files are present the PR body contains a mandatory
+    review checklist and the 'infra-review' label is applied so branch
+    protection rules can require a specialist review before merging.
     """
-    if not ZEROCLAW_WEBHOOK_SECRET:
-        return True
-    expected = hmac.new(
-        ZEROCLAW_WEBHOOK_SECRET.encode(), body, hashlib.sha256
-    ).hexdigest()
-    provided = sig_header.lstrip("sha256=")
-    return hmac.compare_digest(expected, provided)
+    app_files = [p for p in all_file_paths if p not in infra_files]
 
+    # ── Build PR body ────────────────────────────────────────────────────────
+    infra_section = ""
+    if infra_files:
+        checklist = "\n".join(f"- [ ] `{p}`" for p in infra_files)
+        infra_section = (
+            "\n---\n"
+            "## ⚠️  INFRASTRUCTURE FILES — MANDATORY REVIEW BEFORE MERGE\n\n"
+            "This PR contains files that affect live infrastructure, cloud spend, "
+            "or security posture. **Do NOT merge without completing this checklist:**\n\n"
+            "- [ ] Reviewed all `.github/workflows/` files for unintended deploy triggers\n"
+            "- [ ] Verified CI/CD environment targets are correct (staging ≠ production)\n"
+            "- [ ] Confirmed no AWS/cloud credentials are hardcoded in workflows\n"
+            "- [ ] Checked `Dockerfile` / `k8s/` for security misconfigurations\n"
+            "- [ ] All deploy jobs confirmed as `workflow_dispatch` (manual trigger)\n"
+            "- [ ] Ran `terraform plan` locally before merging (if IaC files present)\n\n"
+            f"**Infrastructure files in this PR ({len(infra_files)}):**\n{checklist}\n"
+        )
 
-async def _zeroclaw_reply(reply_url: str, message: str) -> None:
-    """POST an async result/report back to ZeroClaw's SOP callback URL."""
-    if not reply_url:
-        return
+    app_section = ""
+    if app_files:
+        app_list = "\n".join(f"- `{p}`" for p in app_files[:30])
+        if len(app_files) > 30:
+            app_list += f"\n- … and {len(app_files) - 30} more"
+        app_section = f"\n---\n## 📦 Application Files ({len(app_files)})\n\n{app_list}\n"
+
+    body = (
+        f"## 🤖 CoDevx Automated Delivery — Task `{task_id}`\n\n"
+        f"Generated by the **CoDevx 8-agent SDLC pipeline** (Agent Mesh v3.0).\n"
+        + infra_section
+        + app_section
+        + "\n---\n"
+        + ("\n> 🔒 **Reminder:** Infra files require dedicated review — see checklist above.\n"
+           if infra_files else
+           "\n> ✅ No infrastructure files detected. Standard code review applies.\n")
+    )
+
+    labels = ["codevx-delivery"] + (["infra-review"] if infra_files else [])
+
     try:
         import httpx
-        async with httpx.AsyncClient(timeout=10) as client:
-            await client.post(
-                reply_url,
-                json={"message": message},
-                headers={"X-ZeroClaw-Source": "agent-mesh"},
+        gh_headers = {
+            "Authorization": f"Bearer {GITHUB_TOKEN}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            # Create the PR
+            resp = await client.post(
+                f"https://api.github.com/repos/{GITHUB_REPO}/pulls",
+                headers=gh_headers,
+                json={
+                    "title": (
+                        ("[INFRA REVIEW] " if infra_files else "")
+                        + f"feat: CoDevx delivery — task {task_id}"
+                    ),
+                    "body": body,
+                    "head": branch,
+                    "base": "main",
+                },
             )
-    except Exception as exc:
-        add_log(f"[ZeroClaw] Async reply to {reply_url} failed: {exc}")
+            if resp.status_code != 201:
+                add_log(f"[GIT][WARN] PR status {resp.status_code}: {resp.text[:200]}")
+                return None
 
+            pr_data = resp.json()
+            pr_number: int = pr_data["number"]
+            url: str = pr_data.get("html_url", "")
 
-async def _execute_and_reply_zeroclaw(task: str, reply_url: str) -> None:
-    """Run the full SDLC pipeline then POST the delivery report to ZeroClaw."""
-    await execute_pipeline(None, task)
-    if reply_url and SYSTEM_STATE["history"]:
-        entry = SYSTEM_STATE["history"][-1]
-        report = (
-            f"Task Complete: {entry['description']}\n"
-            f"Files: {entry['files_modified']} | Branch: {entry.get('branch', 'N/A')}\n"
-            f"{'PR: ' + entry['pr_url'] if entry.get('pr_url') else 'Committed locally'}"
+            # Ensure labels exist then apply them
+            for label_name in labels:
+                color = "e11d48" if label_name == "infra-review" else "6366f1"
+                await client.post(
+                    f"https://api.github.com/repos/{GITHUB_REPO}/labels",
+                    headers=gh_headers,
+                    json={"name": label_name, "color": color},
+                )  # 422 = already exists, safe to ignore
+            await client.post(
+                f"https://api.github.com/repos/{GITHUB_REPO}/issues/{pr_number}/labels",
+                headers=gh_headers,
+                json={"labels": labels},
+            )
+
+        add_log(
+            f"[GIT] ✅ PR #{pr_number} opened: {url}"
+            + (" | 🔴 infra-review label applied" if infra_files else "")
         )
-        await _zeroclaw_reply(reply_url, report)
+        return url
+    except Exception as exc:
+        add_log(f"[GIT][PR][ERROR] {exc}")
+    return None
+
 
 # ============================================================
-# 8. DISCORD BOT
+# 5.2  TOOL EXECUTION
 # ============================================================
 
+async def run_pytest(cwd: str) -> tuple[bool, str, int]:
+    """Run pytest. Returns (passed, output, test_count)."""
+    if not ENABLE_REAL_TOOLS:
+        return True, "pytest skipped (ENABLE_REAL_TOOLS=false)", 0
+    rc, out, err = await _run_subprocess(
+        ["python", "-m", "pytest", "--tb=short", "-q",
+         "--cov=.", "--cov-report=term-missing"],
+        cwd=cwd,
+    )
+    combined = out + err
+    match = re.search(r"(\d+) passed", combined)
+    count = int(match.group(1)) if match else 0
+    return rc == 0, combined[:3000], count
+
+
+async def run_bandit(cwd: str) -> tuple[bool, str]:
+    """Run bandit SAST scan. Returns (clean, output)."""
+    if not ENABLE_REAL_TOOLS:
+        return True, "bandit skipped (ENABLE_REAL_TOOLS=false)"
+    rc, out, err = await _run_subprocess(
+        ["python", "-m", "bandit", "-r", ".", "-ll", "-f", "txt", "--exit-zero"],
+        cwd=cwd,
+    )
+    combined = out + err
+    has_high = "Severity: High" in combined or "Severity: Critical" in combined
+    return not has_high, combined[:3000]
+
+
+async def run_npm_audit(cwd: str) -> tuple[bool, str]:
+    """Run npm audit. Returns (clean, output)."""
+    if not ENABLE_REAL_TOOLS:
+        return True, "npm audit skipped (ENABLE_REAL_TOOLS=false)"
+    rc, out, err = await _run_subprocess(["npm", "audit", "--audit-level=high"], cwd=cwd)
+    return rc == 0, (out + err)[:3000]
+
+
+# ============================================================
+# 6. AGENT SYSTEM PROMPTS
+# ============================================================
+
+AGENT_SYSTEM_PROMPTS: dict[str, str] = {
+    "Project Manager": (
+        "You are the Project Manager of CoDevx, an autonomous AI software development team.\n"
+        "Your role: decompose tasks, assign phases, write delivery reports, store learnings.\n"
+        "When writing a delivery report: summarise what was built, highlight risks, and note\n"
+        "one key learning per agent in your notes array.\n"
+    ) + _BASE_OUTPUT_FORMAT,
+
+    "Architect": (
+        "You are the Architect of CoDevx. Design the complete technical solution before code is written.\n"
+        "For every task produce:\n"
+        "1. API endpoints (method, path, request/response shape)\n"
+        "2. Data models (fields, types, relationships)\n"
+        "3. React component tree (component names, props)\n"
+        "4. Technology decisions with trade-off justification\n"
+        "5. Auth & security design (OWASP considerations)\n"
+        "Write a design document as docs/architecture_<slug>.md.\n"
+        "Be specific — developer agents implement EXACTLY what you specify.\n"
+    ) + _BASE_OUTPUT_FORMAT,
+
+    "Frontend Dev": (
+        "You are the Frontend Developer of CoDevx.\n"
+        "Stack: React 18+, TypeScript (strict), Tailwind CSS, shadcn/ui, React Query v5, Zod.\n"
+        "Rules:\n"
+        "- Named exports only (no default exports)\n"
+        "- No `any` type — use proper generics and type narrowing\n"
+        "- All forms validated with Zod schemas\n"
+        "- WCAG 2.1 AA accessible\n"
+        "- Mobile-first responsive design\n"
+        "- Components in src/components/, pages in src/pages/, types in src/types/\n"
+        "- Include loading and error states in every component\n"
+    ) + _BASE_OUTPUT_FORMAT,
+
+    "Backend Dev": (
+        "You are the Backend Developer of CoDevx.\n"
+        "Stack: FastAPI, Python 3.12, async SQLAlchemy 2.0, Pydantic v2, structlog.\n"
+        "Rules:\n"
+        "- Full type hints on every function signature\n"
+        "- Input validated with Pydantic v2 models (no raw dict access)\n"
+        "- Async/await throughout — never blocking calls in async context\n"
+        "- Parameterised queries only — never f-string SQL\n"
+        "- HTTPException with safe messages — never expose raw exceptions to clients\n"
+        "- structlog for logging — never print() in production\n"
+        "- Rate-limit auth endpoints\n"
+        "Structure: src/routes/, src/services/, src/schemas/, src/models/\n"
+    ) + _BASE_OUTPUT_FORMAT,
+
+    "Database Engineer": (
+        "You are the Database Engineer of CoDevx.\n"
+        "Stack: PostgreSQL, Alembic, Redis (caching), aiosqlite (embedded).\n"
+        "Rules:\n"
+        "- Declarative SQLAlchemy Base models\n"
+        "- BIGSERIAL / BIGINT primary keys\n"
+        "- updated_at triggers on all mutable tables\n"
+        "- Never raw string formatting for SQL\n"
+        "- All migrations reversible (upgrade + downgrade)\n"
+        "- Index FKs and frequently queried columns\n"
+        "Output: alembic/versions/*.py, sql/schema.sql, sql/rls.sql\n"
+    ) + _BASE_OUTPUT_FORMAT,
+
+    "QA Engineer": (
+        "You are the QA Engineer of CoDevx.\n"
+        "Stack: pytest, hypothesis, Vitest, httpx.AsyncClient.\n"
+        "Rules:\n"
+        "- Target ≥85% branch coverage\n"
+        "- Mock ALL external I/O (HTTP, DB, filesystem, time)\n"
+        "- Every function: at least 1 happy path + 2 error/edge cases\n"
+        "- Use httpx.AsyncClient for FastAPI endpoint tests (never TestClient)\n"
+        "- Use hypothesis for data-validation functions\n"
+        "- Tests in tests/test_*.py (Python) and src/**/*.test.tsx (TypeScript)\n"
+    ) + _BASE_OUTPUT_FORMAT,
+
+    "Security Analyst": (
+        "You are the Security Analyst of CoDevx.\n"
+        "Framework: OWASP Top 10, ASVS Level 2, CWE Top 25.\n"
+        "Tasks:\n"
+        "1. Review all generated code for SQL injection, XSS, command injection,\n"
+        "   broken auth, SSRF, hardcoded secrets, missing rate limiting, CORS misconfig\n"
+        "2. Write docs/security_review_<task_id>.md (severity: CRITICAL/HIGH/MEDIUM/LOW)\n"
+        "3. Provide patch files for any HIGH+ finding\n"
+        "4. Record all findings in notes for team memory\n"
+        "NO HIGH or CRITICAL findings may pass without a fix.\n"
+    ) + _BASE_OUTPUT_FORMAT,
+
+    "DevOps Engineer": (
+        "You are the DevOps Engineer of CoDevx.\n"
+        "Stack: Docker (distroless final stage), GitHub Actions, Kubernetes, Prometheus.\n"
+        "\n"
+        "SAFETY RULES — NEVER VIOLATE:\n"
+        "1. Deploy jobs MUST use 'workflow_dispatch' trigger ONLY — never 'push' or 'pull_request'\n"
+        "   to main. CI jobs (test/lint/build) may use push/pull_request triggers.\n"
+        "2. All deploy jobs MUST declare an 'environment:' block (e.g. 'environment: staging'\n"
+        "   or 'environment: production') so GitHub environment protection rules apply.\n"
+        "3. Every generated workflow MUST start with this comment block:\n"
+        "   # ============================================================\n"
+        "   # CONFIGURE BEFORE USE\n"
+        "   # Required GitHub secrets:\n"
+        "   #   - REGISTRY_TOKEN  (container registry push access)\n"
+        "   #   - KUBECONFIG      (base64-encoded kubeconfig, staging only)\n"
+        "   # Required GitHub environments: 'staging', 'production'\n"
+        "   # Production environment MUST have required reviewers set.\n"
+        "   # ============================================================\n"
+        "4. Never hardcode cloud credentials, account IDs, or IP addresses.\n"
+        "5. Production deployments must require manual approval via GitHub environment reviewers.\n"
+        "   Add a 'needs: [approve]' or separate 'deploy-prod' job that only runs on\n"
+        "   workflow_dispatch with an explicit 'environment: production' block.\n"
+        "6. Non-root containers — always add: USER nonroot or USER 65534\n"
+        "7. Multi-stage Docker builds — minimal final image (distroless or alpine)\n"
+        "8. Resource limits (CPU/memory) on all K8s pods\n"
+        "9. Readiness and liveness probes on every service\n"
+        "10. Secrets via env vars only — never baked into images\n"
+        "\n"
+        "Output: Dockerfile, .github/workflows/ci.yml, .github/workflows/deploy.yml,\n"
+        "        k8s/*.yaml, monitoring/prometheus.yml\n"
+        "Separate ci.yml (auto-triggers on PR) from deploy.yml (manual workflow_dispatch only).\n"
+    ) + _BASE_OUTPUT_FORMAT,
+}
+
+
+# ============================================================
+# 7. DISCORD BOT
+# ============================================================
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
+
+
+class _NullChannel:
+    """Stand-in Discord channel for orders submitted via MCP / REST (no Discord)."""
+
+    async def send(self, *args: Any, **kwargs: Any) -> None:
+        add_log(f"[REPORT] {str(args[0])[:500] if args else ''}")
 
 
 class ApprovalView(discord.ui.View):
@@ -1234,21 +760,21 @@ class ApprovalView(discord.ui.View):
     def _is_architect(self, interaction: discord.Interaction) -> bool:
         return MANAGER_DISCORD_ID == 0 or interaction.user.id == MANAGER_DISCORD_ID
 
-    @discord.ui.button(label="Approve Execution", style=discord.ButtonStyle.success)
-    async def approve(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+    @discord.ui.button(label="✅  Approve Execution", style=discord.ButtonStyle.success, custom_id="approve")
+    async def approve(self, interaction: discord.Interaction, _btn: discord.ui.Button) -> None:
         if not self._is_architect(interaction):
-            await interaction.response.send_message("Only the Architect can approve.", ephemeral=True)
+            await interaction.response.send_message("⛔ Only the Architect can approve.", ephemeral=True)
             return
-        await interaction.response.send_message("Plan Approved. Team executing...", ephemeral=False)
+        await interaction.response.send_message("✅ **Plan Approved.** Team executing...", ephemeral=False)
         self.stop()
         asyncio.create_task(execute_pipeline(interaction.channel, self.task))
 
-    @discord.ui.button(label="Reject / Modify", style=discord.ButtonStyle.danger)
-    async def reject(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+    @discord.ui.button(label="❌  Reject / Modify", style=discord.ButtonStyle.danger, custom_id="reject")
+    async def reject(self, interaction: discord.Interaction, _btn: discord.ui.Button) -> None:
         if not self._is_architect(interaction):
-            await interaction.response.send_message("Only the Architect can reject.", ephemeral=True)
+            await interaction.response.send_message("⛔ Only the Architect can reject.", ephemeral=True)
             return
-        await interaction.response.send_message("Plan Rejected. Issue a revised order.", ephemeral=False)
+        await interaction.response.send_message("❌ **Plan Rejected.** Issue a revised order.", ephemeral=False)
         set_agent_status("Project Manager", "IDLE", "blue")
         SYSTEM_STATE["current_task"] = "None"
         add_log("[Project Manager] Task rejected. Team standing by.")
@@ -1262,849 +788,364 @@ async def on_ready() -> None:
 
 @bot.command(name="order")
 async def receive_order(ctx: commands.Context, *, task: str) -> None:
-    """!order <task description>  -- issue in #orders channel"""
+    """!order <task description>  — issue in #orders channel"""
     if CH_ORDERS and ctx.channel.id != CH_ORDERS:
-        await ctx.send(f"Please issue orders in <#{CH_ORDERS}>.", delete_after=10)
+        await ctx.send(f"⚠️ Please issue orders in <#{CH_ORDERS}>.", delete_after=10)
         return
-    await _handle_new_order(task, discord_channel=ctx.channel, discord_reply=ctx.send)
 
-
-async def _handle_new_order(
-    task: str,
-    discord_channel: Any = None,
-    discord_reply: Any = None,
-) -> None:
     add_log(f"[ORDER] Received: '{task}'")
     SYSTEM_STATE["current_task"] = task
     set_agent_status("Project Manager", "THINKING...", "blue")
+    await ctx.send(f"🧠 **Project Manager** is analyzing: `{task}`...")
+    await asyncio.sleep(3)
 
-    if discord_reply:
-        await discord_reply(f"Project Manager analyzing: `{task}`...")
-
-    await asyncio.sleep(2)
-    set_agent_status("Project Manager", "WAITING APPROVAL", "yellow")
-    add_log("[Project Manager] Plan ready -- awaiting approval.")
-
-    if _use_discord() and (discord_channel or bot.is_ready()):
-        llm_note = f"LLM: {OPENAI_MODEL}" if OPENAI_API_KEY else "LLM: Simulated (set OPENAI_API_KEY)"
-        plan = (
-            f"### Execution Plan\n**Order:** {task}\n\n**Pipeline:**\n"
-            f"1. Architect -- Design\n"
-            f"2. Frontend Dev + Backend Dev (parallel)\n"
-            f"3. Database Engineer -- Schema changes\n"
-            f"4. QA Engineer -- Tests (80% gate)\n"
-            f"5. Security Analyst -- OWASP scan\n"
-            f"6. DevOps Engineer -- Docker & CI/CD\n"
-            f"7. Project Manager -- Final report\n\n"
-            f"**{llm_note}**"
-        )
-        target_ch = bot.get_channel(CH_PLANS) if CH_PLANS else discord_channel
-        await (target_ch or discord_channel).send(plan, view=ApprovalView(task))
-
-    if _use_whatsapp():
-        await wa_send_plan(task)
-
-
-async def _discord_post(channel_id: int, message: str) -> None:
-    if not channel_id or not bot.is_ready():
-        return
-    ch = bot.get_channel(channel_id)
-    if ch:
-        try:
-            await ch.send(message[:2000])
-        except discord.HTTPException:
-            pass
-
-
-
-
-# ============================================================
-# 8.1  HUMAN-IN-THE-LOOP  Architecture Gate  (Discord buttons)
-# ============================================================
-
-class ArchGateView(discord.ui.View):
-    """Sent to #plans after Architect designs; manager clicks Approve or Reject."""
-
-    def __init__(self, task_id: str, task: str) -> None:
-        super().__init__(timeout=float(HUMAN_GATE_TIMEOUT))
-        self.task_id = task_id
-        self.task    = task
-
-    def _is_manager(self, interaction: discord.Interaction) -> bool:
-        return MANAGER_DISCORD_ID == 0 or interaction.user.id == MANAGER_DISCORD_ID
-
-    @discord.ui.button(label="✅ Approve Architecture", style=discord.ButtonStyle.success)
-    async def approve_arch(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
-        if not self._is_manager(interaction):
-            await interaction.response.send_message("⛔ Only the manager may approve.", ephemeral=True)
-            return
-        gate = _pipeline_gates.get(self.task_id)
-        if gate and not gate.is_set():
-            gate.set()
-            await interaction.response.send_message(
-                f"✅ **Architecture approved.** Pipeline continuing for `{self.task_id}`...",
-                ephemeral=False,
-            )
-        else:
-            await interaction.response.send_message("⚠️ Gate already resolved or expired.", ephemeral=True)
-        self.stop()
-
-    @discord.ui.button(label="❌ Reject Architecture", style=discord.ButtonStyle.danger)
-    async def reject_arch(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
-        if not self._is_manager(interaction):
-            await interaction.response.send_message("⛔ Only the manager may reject.", ephemeral=True)
-            return
-        gate = _pipeline_gates.get(self.task_id)
-        if gate:
-            SYSTEM_STATE[f"_gate_rejected_{self.task_id}"] = True
-            gate.set()  # unblock the wait
-            await interaction.response.send_message(
-                f"❌ **Architecture rejected.** Pipeline aborted for `{self.task_id}`.",
-                ephemeral=False,
-            )
-        else:
-            await interaction.response.send_message("⚠️ Gate already resolved or expired.", ephemeral=True)
-        self.stop()
-
-# ============================================================
-# 9. EXECUTION PIPELINE
-# ============================================================
-
-# ============================================================
-# 6.  IDE CHATBOT TOOLS  (Copilot / Cursor / Antigravity)
-# ============================================================
-
-async def consult_ide_chatbot(
-    agent: str,
-    topic: str,
-    context: str,
-    *,
-    ide: str | None = None,
-) -> str:
-    """
-    Let an agent consult an IDE chatbot (GitHub Copilot, Cursor AI, or
-    Google Antigravity) as a SUPPLEMENTARY TOOL -- separate from the
-    agent's main LLM brain (LLM_PROVIDER).
-
-    `topic`   -- short label, e.g. "code review", "test suggestions"
-    `context` -- the code / question to send to the IDE chatbot
-    `ide`     -- "copilot" | "cursor" | "antigravity" | "all"
-                 defaults to the IDE_CHATBOT env setting.
-
-    Returns combined IDE chatbot response, or empty string if unavailable.
-    """
-    if not IDE_TOOLS_ENABLED:
-        return ""
-
-    target = ide or IDE_CHATBOT
-    ides   = ["copilot", "cursor", "antigravity"] if target == "all" else [target]
-    parts: list[str] = []
-
-    for _ide in ides:
-        if _ide in ("copilot", "cursor"):
-            # Route through the VS Code extension bridge (:8001)
-            payload = {
-                "agent": agent,
-                "system": (
-                    f"You are the {_ide.title()} AI assistant integrated into "
-                    f"an autonomous software development pipeline. "
-                    f"Provide concise, actionable {topic}."
-                ),
-                "user": context[:3000],
-                "ide": _ide,
-            }
-            try:
-                import httpx
-                async with httpx.AsyncClient(timeout=120.0) as client:
-                    resp = await client.post(
-                        f"{COPILOT_BRIDGE_URL}/chat", json=payload
-                    )
-                    resp.raise_for_status()
-                    result = resp.json().get("content", "")
-                    if result:
-                        parts.append(f"### {_ide.title()} says:\n{result}")
-                        add_log(f"[{agent}] [{_ide.title()}] {topic}: {result[:80]}")
-            except Exception as exc:
-                add_log(f"[{agent}] [{_ide.title()}] bridge unreachable: {exc}")
-
-        elif _ide == "antigravity":
-            # Antigravity is a Google MCP IDE -- it connects TO CoDevx, not the reverse.
-            # To "consult Antigravity's AI" we call Google Gemini directly via LiteLLM
-            # (same frontier models Antigravity runs internally: Gemini 3.1 Pro etc.)
-            if not GOOGLE_API_KEY:
-                add_log(
-                    f"[{agent}] [Antigravity/Gemini] skipped -- "
-                    "GOOGLE_API_KEY required (set it in .env)"
-                )
-                continue
-            import os as _osa
-            _osa.environ.setdefault("GEMINI_API_KEY", GOOGLE_API_KEY)
-            try:
-                import litellm as _ll  # type: ignore
-                _ll.drop_params = True
-                ag_resp = await _ll.acompletion(
-                    model=ANTIGRAVITY_MODEL,  # e.g. gemini/gemini-2.5-pro
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": (
-                                "You are a Google Gemini AI assistant (the model powering "
-                                "Google Antigravity IDE). Provide concise, actionable "
-                                f"{topic}."
-                            ),
-                        },
-                        {"role": "user", "content": context[:3000]},
-                    ],
-                    max_tokens=1200,
-                    temperature=0.3,
-                )
-                result = ag_resp.choices[0].message.content or ""
-                if result:
-                    parts.append(f"### Antigravity (Gemini) says:\n{result}")
-                    add_log(f"[{agent}] [Antigravity/Gemini] {topic}: {result[:80]}")
-            except Exception as exc:
-                add_log(f"[{agent}] [Antigravity/Gemini] error: {exc}")
-
-    return "\n\n".join(parts)
-
-
-
-
-# ============================================================
-# 9.1  LANGGRAPH SUBGRAPHS  (QA + Security ReAct loops)
-# ============================================================
-
-async def _notify_manager_gate(task_id: str, task: str, arch_summary: str) -> None:
-    """Notify Discord (#plans) and WhatsApp with arch design + approval buttons."""
-    preview = arch_summary[:1200].strip()
-    discord_msg = (
-        f"🏗️ **Architecture Ready — `{task_id}`**\n\n"
-        f"**Task:** {task}\n\n"
-        f"**Design:**\n{preview}\n\n"
-        f"⏳ Waiting up to {HUMAN_GATE_TIMEOUT}s for approval. "
-        f"Click a button below or reply via WhatsApp."
+    plan = (
+        f"### 📋 Execution Plan\n**Order:** {task}\n\n**Pipeline:**\n"
+        f"1. 🟣 **Architect** — System design + ADR\n"
+        f"2. 🔵 **Frontend Dev** + 🟢 **Backend Dev** *(parallel)* — Implement code\n"
+        f"3. ⚫ **Database Engineer** — Schema + migrations\n"
+        f"4. 🟡 **QA Engineer** — Tests ≥85% coverage gate\n"
+        f"5. 🔴 **Security Analyst** — OWASP + ASVS scan\n"
+        f"6. 🟠 **DevOps Engineer** — Docker + CI/CD\n"
+        f"7. 🔵 **Project Manager** — Delivery report + memory\n\n"
+        f"**LLM:** {'✅ ' + LLM_MODEL if LLM_ENABLED else '⚠️ Simulation (set OPENAI_API_KEY)'}\n"
+        f"**Git:** {'✅ ' + (GITHUB_REPO or GIT_WORKSPACE) if GITHUB_TOKEN else '📁 Local workspace'}\n"
+        f"**Tools:** {'✅ pytest + bandit enabled' if ENABLE_REAL_TOOLS else '⚠️ Simulated (ENABLE_REAL_TOOLS=false)'}\n\n"
+        f"**Requires your approval ↓**"
     )
-    if _use_discord() and bot.is_ready():
-        target = bot.get_channel(CH_PLANS) if CH_PLANS else None
-        if target:
-            try:
-                await target.send(discord_msg[:2000], view=ArchGateView(task_id, task))
-                add_log(f"[HITL] Architecture gate posted to Discord #plans — task {task_id}")
-            except Exception as exc:
-                add_log(f"[HITL] Discord gate notify failed: {exc}")
 
-    if _use_whatsapp() and MANAGER_WHATSAPP:
-        wa_text = (
-            f"Architecture ready — task {task_id}\n\n"
-            f"Task: {task}\n\n"
-            f"{arch_summary[:600]}\n\n"
-            f"Reply:\n"
-            f"  approve arch {task_id}  — proceed with coding\n"
-            f"  reject arch {task_id}   — abort pipeline"
-        )
-        await wa_send(MANAGER_WHATSAPP, wa_text)
-        add_log(f"[HITL] Architecture gate sent via WhatsApp — task {task_id}")
+    set_agent_status("Project Manager", "WAITING APPROVAL", "yellow")
+    add_log("[Project Manager] Plan ready. Awaiting approval in #plans.")
+
+    plans_ch = bot.get_channel(CH_PLANS) if CH_PLANS else ctx.channel
+    await (plans_ch or ctx.channel).send(plan, view=ApprovalView(task))
 
 
-async def _run_qa_subgraph(
-    task: str,
-    arch_out: str,
-    fe_phase: str,
-    be_phase: str,
-    all_files: list[dict],
-    qa_files: list[dict],
-    ctx: dict[str, str],
-    task_id: str = "",
-) -> dict:
+# ============================================================
+# 8. EXECUTION PIPELINE  (LLM-powered, 8 agents)
+# ============================================================
+
+async def execute_pipeline(channel: Any, task: str) -> None:  # noqa: C901
     """
-    QA gate: write tests → run tests → (if failed) reason + retry.
-
-    LANGGRAPH_ENABLED=false → classic for-loop (unchanged behaviour).
-    LANGGRAPH_ENABLED=true  → LangGraph StateGraph with:
-      • Autonomous ReAct retry loop (write → run → conditional edge → write …)
-      • SQLite checkpointing so the loop survives server restarts
+    Full 8-agent SDLC pipeline.
+    LLM-powered when OPENAI_API_KEY is configured; gracefully simulates otherwise.
     """
-    # ── shared inner coroutines ───────────────────────────────────────────────
-    async def _write_tests(attempt: int, test_output: str) -> tuple[str, list[dict]]:
-        set_agent_status("QA Engineer", "TESTING...", "yellow")
-        retry_lbl = f" (retry {attempt}/{MAX_RETRIES})" if attempt else ""
-        add_log(f"[QA Engineer] Writing test suites{retry_lbl}...")
-        qa_ctx = (
-            "Task: " + task + "\n\n"
-            "Architecture summary:\n" + arch_out[:1200] + "\n\n"
-            "Generated files manifest:\n" + _build_file_manifest(all_files) + "\n\n"
-            "Frontend code (latest phase):\n" + fe_phase[:1500] + "\n\n"
-            "Backend code (latest phase):\n" + be_phase[:1500]
-        )
-        if attempt > 0 and test_output:
-            qa_ctx += "\n\nTest failures to fix:\n" + test_output[:600]
-        if IDE_TOOLS_ENABLED and be_phase.strip():
-            ide_hints = await consult_ide_chatbot(
-                "QA Engineer",
-                "test case suggestions (edge cases, error paths, security tests)",
-                f"Suggest additional test cases for this code:\n\n{be_phase[:2000]}",
-            )
-            if ide_hints:
-                qa_ctx += f"\n\nIDE chatbot test suggestions:\n{ide_hints[:800]}"
-                add_log("[QA Engineer] IDE test hints incorporated.")
-        out = await llm_call("QA Engineer", qa_ctx)
-        new_files = parse_files_from_llm(out)
-        _write_files_to_workspace(new_files)
-        return out, new_files
+    task_id = str(uuid.uuid4())[:8]
+    branch  = f"feat/{task_id}"
+    all_files: list[dict[str, Any]] = []
+    tests_passed = 0
+    bandit_clean = True
+    pr_url: str | None = None
 
-    async def _exec_tests() -> tuple[bool, str]:
-        if not ENABLE_REAL_TOOLS:
-            add_log(f"[QA Engineer] Test files written. (ENABLE_REAL_TOOLS=false)")
-            return True, ""
-        res = await run_tests_real(GIT_WORKSPACE)
-        cov = res.get("coverage", 0)
-        ok  = res["passed"] and cov >= 80
-        add_log(f"[QA Engineer] Real tests: {'PASSED' if ok else 'FAILED'} | Coverage: {cov}%")
-        return ok, res["output"]
+    await git_init_workspace()
 
-    # ── LangGraph path ────────────────────────────────────────────────────────
-    if LANGGRAPH_ENABLED:
-        try:
-            from typing import TypedDict as _TD
-            from langgraph.graph import StateGraph as _SG, END as _END  # type: ignore
-            from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver as _CKPT  # type: ignore
-
-            class _QAS(_TD):
-                attempts:     int
-                passed:       bool
-                test_output:  str
-                qa_out:       str
-
-            async def _node_write(state: _QAS) -> dict:  # type: ignore[misc]
-                out, new_f = await _write_tests(state["attempts"], state["test_output"])
-                all_files.extend(new_f)
-                qa_files.extend(new_f)
-                ctx["qa"] = out
-                return {"qa_out": out}
-
-            async def _node_run(state: _QAS) -> dict:  # type: ignore[misc]
-                ok, output = await _exec_tests()
-                ctx["test_output"] = output
-                return {"passed": ok, "test_output": output, "attempts": state["attempts"] + 1}
-
-            def _route(state: _QAS) -> str:
-                if state["passed"]:
-                    return _END  # type: ignore[return-value]
-                if state["attempts"] >= MAX_RETRIES:
-                    add_log("[QA Engineer][LangGraph] Max retries — best-effort proceed.")
-                    return _END  # type: ignore[return-value]
-                add_log(
-                    f"[QA Engineer][LangGraph] Autonomous retry "
-                    f"{state['attempts']}/{MAX_RETRIES} — re-writing tests..."
-                )
-                return "write_tests"
-
-            builder = _SG(_QAS)
-            builder.add_node("write_tests", _node_write)
-            builder.add_node("run_tests",   _node_run)
-            builder.set_entry_point("write_tests")
-            builder.add_edge("write_tests", "run_tests")
-            builder.add_conditional_edges("run_tests", _route)
-
-            ckpt_db = str(DB_PATH).replace(".db", "_lg.db")
-            async with _CKPT.from_conn_string(ckpt_db) as checkpointer:
-                graph  = builder.compile(checkpointer=checkpointer)
-                thread = {"configurable": {"thread_id": f"{task_id}_qa"}}
-                add_log("[QA Engineer][LangGraph] Subgraph compiled — starting ReAct loop.")
-                await graph.ainvoke(
-                    {"attempts": 0, "passed": False, "test_output": "", "qa_out": ""},
-                    config=thread,
-                )
-
-            set_agent_status("QA Engineer", "IDLE", "yellow")
-            return {"all_files": all_files, "qa_files": qa_files, "ctx": ctx}
-
-        except ImportError as _ie:
-            add_log(f"[QA Engineer] LangGraph import failed ({_ie}) — falling back to legacy loop.")
-        except Exception as _ex:
-            add_log(f"[QA Engineer][LangGraph] Subgraph error ({_ex}) — falling back to legacy loop.")
-
-    # ── Legacy for-loop path (default + fallback) ─────────────────────────────
-    test_output = ctx.get("test_output", "")
-    for qa_attempt in range(MAX_RETRIES + 1):
-        qa_out, qa_new = await _write_tests(qa_attempt, test_output)
-        ctx["qa"] = qa_out
-        qa_files.extend(qa_new)
-        all_files.extend(qa_new)
-        passed, test_output = await _exec_tests()
-        ctx["test_output"] = test_output
-        if passed:
-            break
-        if qa_attempt >= MAX_RETRIES:
-            add_log("[QA Engineer] Max retries reached — proceeding with best effort.")
-            break
-
-    set_agent_status("QA Engineer", "IDLE", "yellow")
-    return {"all_files": all_files, "qa_files": qa_files, "ctx": ctx}
-
-
-async def _run_security_subgraph(
-    task: str,
-    arch_out: str,
-    fe_phase: str,
-    be_phase: str,
-    db_cumulative: str,
-    all_files: list[dict],
-    ctx: dict[str, str],
-    task_id: str = "",
-) -> dict:
-    """
-    Security gate: LLM OWASP review → real bandit/npm-audit → apply fixes → retry.
-
-    LANGGRAPH_ENABLED=false → classic for-loop (unchanged behaviour).
-    LANGGRAPH_ENABLED=true  → LangGraph StateGraph with:
-      • Autonomous ReAct fix-and-retry loop
-      • SQLite checkpointing for resume-on-crash
-    """
-    scan_passed = True
-
-    async def _review(attempt: int, prev_findings: str) -> tuple[str, bool, list[dict]]:
-        set_agent_status("Security Analyst", "SCANNING...", "red")
-        retry_lbl = f" (retry {attempt}/{MAX_RETRIES})" if attempt else ""
-        add_log(f"[Security Analyst] OWASP Top 10 review{retry_lbl}...")
-        sec_ctx = (
-            "Review for OWASP Top 10 + OWASP ASVS Level 2 + CWE Top 25:\n\n"
-            "Generated files:\n" + _build_file_manifest(all_files) + "\n\n"
-            "Backend code (full latest phase):\n" + be_phase[:2000] + "\n\n"
-            "Frontend code (full latest phase):\n" + fe_phase[:1000] + "\n\n"
-            "Database schema:\n" + db_cumulative[-400:]
-        )
-        if attempt > 0 and prev_findings:
-            sec_ctx += "\n\nPrevious scan findings:\n" + prev_findings[:500]
-        if IDE_TOOLS_ENABLED and be_phase.strip():
-            ide_hints = await consult_ide_chatbot(
-                "Security Analyst",
-                "security vulnerability analysis (OWASP Top 10, injection, auth flaws)",
-                f"Identify security vulnerabilities in this backend code:\n\n{be_phase[:2000]}",
-            )
-            if ide_hints:
-                sec_ctx += f"\n\nIDE chatbot security hints:\n{ide_hints[:800]}"
-                add_log("[Security Analyst] IDE security hints incorporated.")
-        out      = await llm_call("Security Analyst", sec_ctx)
-        passed   = "SCAN: FAILED" not in out.upper()
-        fix_files = parse_files_from_llm(out) if not passed else []
-        return out, passed, fix_files
-
-    async def _run_tools() -> str:
-        if not ENABLE_REAL_TOOLS:
-            return ""
-        real = await run_security_real(GIT_WORKSPACE)
-        add_log(f"[Security Analyst] bandit: {real['python_issues']} | npm audit: {real['npm_issues']}")
-        ctx["scan_output"] = real["output"]
-        return real["output"]
-
-    # ── LangGraph path ────────────────────────────────────────────────────────
-    if LANGGRAPH_ENABLED:
-        try:
-            from typing import TypedDict as _TD
-            from langgraph.graph import StateGraph as _SG, END as _END  # type: ignore
-            from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver as _CKPT  # type: ignore
-
-            class _SecS(_TD):
-                attempts:      int
-                passed:        bool
-                scan_findings: str
-                sec_out:       str
-
-            async def _node_review(state: _SecS) -> dict:  # type: ignore[misc]
-                out, ok, fix_f = await _review(state["attempts"], state["scan_findings"])
-                ctx["security"] = out
-                if fix_f:
-                    all_files.extend(fix_f)
-                    _write_files_to_workspace(fix_f)
-                    add_log(f"[Security Analyst][LangGraph] {len(fix_f)} fix file(s) applied.")
-                return {"sec_out": out, "passed": ok}
-
-            async def _node_scan(state: _SecS) -> dict:  # type: ignore[misc]
-                findings = await _run_tools()
-                add_log(f"[Security Analyst] LLM verdict: {'PASSED' if state['passed'] else 'FAILED'}")
-                return {
-                    "scan_findings": findings,
-                    "attempts": state["attempts"] + 1,
-                }
-
-            def _route(state: _SecS) -> str:
-                if state["passed"]:
-                    return _END  # type: ignore[return-value]
-                if state["attempts"] >= MAX_RETRIES:
-                    add_log("[Security Analyst][LangGraph] Max retries — escalating.")
-                    return _END  # type: ignore[return-value]
-                add_log(
-                    f"[Security Analyst][LangGraph] Autonomous fix+retry "
-                    f"{state['attempts']}/{MAX_RETRIES}..."
-                )
-                return "review"
-
-            builder = _SG(_SecS)
-            builder.add_node("review", _node_review)
-            builder.add_node("scan",   _node_scan)
-            builder.set_entry_point("review")
-            builder.add_edge("review", "scan")
-            builder.add_conditional_edges("scan", _route)
-
-            ckpt_db = str(DB_PATH).replace(".db", "_lg.db")
-            async with _CKPT.from_conn_string(ckpt_db) as checkpointer:
-                graph  = builder.compile(checkpointer=checkpointer)
-                thread = {"configurable": {"thread_id": f"{task_id}_sec"}}
-                add_log("[Security Analyst][LangGraph] Subgraph compiled — starting ReAct loop.")
-                final = await graph.ainvoke(
-                    {"attempts": 0, "passed": False, "scan_findings": "", "sec_out": ""},
-                    config=thread,
-                )
-            scan_passed = final.get("passed", True)
-
-            if not scan_passed:
-                raise RuntimeError(
-                    "Security scan FAILED after all LangGraph retry attempts — "
-                    "unresolved CRITICAL/HIGH vulnerabilities detected."
-                )
-
-            set_agent_status("Security Analyst", "IDLE", "red")
-            return {"all_files": all_files, "ctx": ctx, "scan_passed": scan_passed}
-
-        except RuntimeError:
-            raise
-        except ImportError as _ie:
-            add_log(f"[Security Analyst] LangGraph import failed ({_ie}) — falling back to legacy loop.")
-        except Exception as _ex:
-            add_log(f"[Security Analyst][LangGraph] Subgraph error ({_ex}) — falling back to legacy loop.")
-
-    # ── Legacy for-loop path (default + fallback) ─────────────────────────────
-    prev_findings = ctx.get("scan_output", "")
-    for sec_attempt in range(MAX_RETRIES + 1):
-        sec_out, scan_passed, fix_f = await _review(sec_attempt, prev_findings)
-        ctx["security"] = sec_out
-        prev_findings   = await _run_tools()
-        add_log(f"[Security Analyst] LLM verdict: {'PASSED' if scan_passed else 'FAILED'}")
-        if scan_passed:
-            break
-        if sec_attempt >= MAX_RETRIES:
-            raise RuntimeError(
-                "Security scan FAILED after all retry attempts — "
-                "unresolved CRITICAL/HIGH vulnerabilities detected."
-            )
-        if fix_f:
-            all_files.extend(fix_f)
-            _write_files_to_workspace(fix_f)
-            add_log(f"[Security Analyst] {len(fix_f)} fix file(s) applied — retrying scan.")
-
-    set_agent_status("Security Analyst", "IDLE", "red")
-    return {"all_files": all_files, "ctx": ctx, "scan_passed": scan_passed}
-
-
-async def execute_pipeline(channel: Any, task: str) -> None:
-
-    """
-    Full 8-agent SDLC pipeline (v4.0):
-      Architect (1x, full design) -> Decompose -> N x [Frontend+Backend+Database]
-      -> QA (with retry loop + real pytest/vitest)
-      -> Security (with fix loop + real bandit/npm-audit)
-      -> DevOps (CI/CD + optional Docker build)
-      -> Git commit + GitHub PR
-      -> Project Manager (delivery report)
-      -> Persist agent memories for future tasks
-    """
-    task_id   = str(uuid.uuid4())[:8]
-    all_files: list[dict] = []
-    llm_used  = bool(OPENAI_API_KEY)
-    ctx: dict[str, str] = {}
-    scan_passed = True
-    qa_files:   list[dict] = []
-    fe_out, be_out = "", ""
-    db_cumulative = ""   # accumulates DB schema across all phases
+    # ── Read the living project architecture document ─────────────────────────
+    project_arch = _read_project_architecture()
+    arch_project_ctx = (
+        f"\n\n---\n**Existing Project Architecture** (extend this — do not contradict or redesign from scratch):\n{project_arch}"
+        if project_arch
+        else "\n\n(No existing project architecture file — this may be the first task for this project.)"
+    )
+    if project_arch:
+        add_log("[PM] 📖 Loaded existing PROJECT_ARCHITECTURE.md for context injection.")
 
     try:
-        # ── Recall past memories relevant to this task ────────────────────────
-        memories  = await memory_recall(task, limit=MEMORY_CONTEXT_K)
-        mem_ctx   = "\n".join(f"- {m}" for m in memories) if memories else ""
-
-        # PHASE 0 — Architect: full system design
+        # ── PHASE 1: Architect ───────────────────────────────────────────────
         set_agent_status("Architect", "DESIGNING...", "purple")
-        set_agent_status("Project Manager", "OBSERVING", "blue")
-        add_log("[Architect] Designing full system architecture...")
-        arch_prompt = "Feature request: " + task + "\n\nProduce the complete architecture plan."
-        if mem_ctx:
-            arch_prompt += "\n\nRelevant context from past builds:\n" + mem_ctx
-        arch_out = await llm_call("Architect", arch_prompt)
-        # IDE Chatbot: second opinion on the architecture design
-        if IDE_TOOLS_ENABLED:
-            ide_arch_review = await consult_ide_chatbot(
-                "Architect",
-                "architecture review (scalability, maintainability, design patterns)",
-                f"Review this software architecture plan and suggest improvements:\n\n{arch_out[:2500]}",
-            )
-            if ide_arch_review:
-                arch_out += f"\n\n<!-- IDE Architecture Review -->\n{ide_arch_review[:600]}"
-                add_log("[Architect] IDE architecture review appended.")
-        ctx["arch"] = arch_out
-        add_log(f"[Architect] {arch_out.splitlines()[0][:120]}")
-        add_log("[Architect] Architecture complete.")
+        add_log(f"[Architect] Designing solution for task {task_id}...")
+        arch_memories = await db_recall_memories("Architect", MEMORY_CONTEXT_K)
+        mem_ctx = "\n".join(f"- {m}" for m in arch_memories) or "No prior memories."
+        arch_raw = await call_llm(
+            "Architect",
+            AGENT_SYSTEM_PROMPTS["Architect"],
+            f"Task: {task}\n\nPast architecture memories:\n{mem_ctx}{arch_project_ctx}\n\nDesign the complete technical solution. IMPORTANT: if an existing project architecture is shown above, extend and refine it — do not redesign components that already exist.",
+            temperature=0.4,
+        )
+        arch_result = _parse_agent_response(arch_raw)
+        architecture_doc = arch_result.get("summary", "")
+        for f in arch_result.get("files", []):
+            await write_workspace_file(task_id, f["path"], f["content"])
+            all_files.append(f)
+        for note in arch_result.get("notes", []):
+            await db_store_memory(task_id, "Architect", "architecture", note)
+        add_log(f"[Architect] ✅ Design complete — {len(arch_result.get('files', []))} docs.")
         set_agent_status("Architect", "IDLE", "purple")
 
-        # ── Human-in-the-loop architecture gate ───────────────────────────────
-        if HUMAN_GATE_ENABLED:
-            gate_event = asyncio.Event()
-            _pipeline_gates[task_id] = gate_event
-            _gate_task_map["current"] = task_id
-            set_agent_status("Architect", "WAITING APPROVAL", "yellow")
-            add_log(f"[HITL] Architecture gate open — notifying manager (task {task_id})...")
-            await _notify_manager_gate(task_id, task, arch_out)
-            try:
-                await asyncio.wait_for(gate_event.wait(), timeout=float(HUMAN_GATE_TIMEOUT))
-                add_log(f"[HITL] Gate released for task {task_id}.")
-            except asyncio.TimeoutError:
-                add_log(
-                    f"[HITL] Gate timeout ({HUMAN_GATE_TIMEOUT}s) — auto-proceeding with architecture."
-                )
-            finally:
-                _pipeline_gates.pop(task_id, None)
-                _gate_task_map.pop("current", None)
-            if SYSTEM_STATE.pop(f"_gate_rejected_{task_id}", False):
-                add_log("[HITL] Architecture rejected by manager. Aborting pipeline.")
-                raise RuntimeError("Architecture rejected by manager via HITL gate.")
-            set_agent_status("Architect", "IDLE", "purple")
-            add_log("[HITL] Architecture approved — pipeline continuing.")
+        # ── PHASE 2: Frontend + Backend (parallel) ───────────────────────────
+        set_agent_status("Frontend Dev",    "CODING...", "cyan")
+        set_agent_status("Backend Dev",     "CODING...", "green")
+        set_agent_status("Project Manager", "OBSERVING", "blue")
+        add_log("[Frontend Dev] Implementing React components...")
+        add_log("[Backend Dev]  Implementing FastAPI endpoints...")
 
-        # ── Break task into implementation phases ─────────────────────────────
-        phase_list = await decompose_task(task)
-        add_log(f"[PM] {len(phase_list)} implementation phase(s) planned.")
-
-        # PHASE 1..N — Frontend + Backend + Database (per phase)
-        for phase_idx, phase in enumerate(phase_list, 1):
-            ph_label = f"Phase {phase_idx}/{len(phase_list)}"
-            add_log(f"[{ph_label}] {phase[:90]}")
-
-            # Frontend Dev + Backend Dev (parallel)
-            set_agent_status("Frontend Dev", "CODING...", "cyan")
-            set_agent_status("Backend Dev",  "CODING...", "green")
-            add_log(f"[Frontend Dev] {ph_label} — writing components...")
-            add_log(f"[Backend Dev]  {ph_label} — writing endpoints...")
-
-            fe_prev = fe_out[-600:] if fe_out else "None yet"
-            be_prev = be_out[-600:] if be_out else "None yet"
-            fe_ctx = (
-                "Task (phase): " + phase + "\n\n"
-                "Full architecture:\n" + arch_out + "\n\n"
-                "Previously written FE:\n" + fe_prev
+        async def _run_frontend() -> dict[str, Any]:
+            mems = await db_recall_memories("Frontend Dev", MEMORY_CONTEXT_K)
+            mem = "\n".join(f"- {m}" for m in mems) or "No prior memories."
+            raw = await call_llm(
+                "Frontend Dev",
+                AGENT_SYSTEM_PROMPTS["Frontend Dev"],
+                f"Task: {task}\n\nArchitecture:\n{architecture_doc}{arch_project_ctx}\n\nPast memories:\n{mem}\n\nImplement all required frontend components.",
+                temperature=0.6,
             )
-            be_ctx = (
-                "Task (phase): " + phase + "\n\n"
-                "Full architecture:\n" + arch_out + "\n\n"
-                "Files already generated:\n" + _build_file_manifest(all_files) + "\n\n"
-                + ("Database schema from previous phases:\n" + db_cumulative[-800:] + "\n\n"
-                   if db_cumulative else "")
-                + "Previously written BE:\n" + be_prev
+            return _parse_agent_response(raw)
+
+        async def _run_backend() -> dict[str, Any]:
+            mems = await db_recall_memories("Backend Dev", MEMORY_CONTEXT_K)
+            mem = "\n".join(f"- {m}" for m in mems) or "No prior memories."
+            raw = await call_llm(
+                "Backend Dev",
+                AGENT_SYSTEM_PROMPTS["Backend Dev"],
+                f"Task: {task}\n\nArchitecture:\n{architecture_doc}{arch_project_ctx}\n\nPast memories:\n{mem}\n\nImplement all required backend routes and services.",
+                temperature=0.4,
             )
-            fe_phase, be_phase = await asyncio.gather(
-                llm_call("Frontend Dev", fe_ctx),
-                llm_call("Backend Dev",  be_ctx),
-            )
-            fe_out += "\n" + fe_phase
-            be_out += "\n" + be_phase
+            return _parse_agent_response(raw)
 
-            fe_files = parse_files_from_llm(fe_phase)
-            be_files = parse_files_from_llm(be_phase)
-            all_files.extend(fe_files + be_files)
-            _write_files_to_workspace(fe_files + be_files)
-            add_log(f"[Frontend Dev] {len(fe_files)} file(s) written — {ph_label}")
-            add_log(f"[Backend Dev]  {len(be_files)} file(s) written — {ph_label}")
+        fe_result, be_result = await asyncio.gather(_run_frontend(), _run_backend())
+        for f in fe_result.get("files", []):
+            await write_workspace_file(task_id, f["path"], f["content"])
+            all_files.append(f)
+        for note in fe_result.get("notes", []):
+            await db_store_memory(task_id, "Frontend Dev", "code_pattern", note)
+        for f in be_result.get("files", []):
+            await write_workspace_file(task_id, f["path"], f["content"])
+            all_files.append(f)
+        for note in be_result.get("notes", []):
+            await db_store_memory(task_id, "Backend Dev", "code_pattern", note)
+        add_log(f"[Frontend Dev] ✅ {len(fe_result.get('files', []))} components written.")
+        add_log(f"[Backend Dev]  ✅ {len(be_result.get('files', []))} endpoints written.")
+        set_agent_status("Frontend Dev", "IDLE", "cyan")
+        set_agent_status("Backend Dev",  "IDLE", "green")
 
-            # IDE Chatbot: Backend code review (runs only when IDE_TOOLS_ENABLED=true)
-            if IDE_TOOLS_ENABLED and be_phase.strip():
-                ide_review = await consult_ide_chatbot(
-                    "Backend Dev",
-                    "code review and improvement suggestions",
-                    f"Review this backend code for quality, patterns, and best practices:\n\n{be_phase[:2500]}",
-                )
-                if ide_review:
-                    ctx["ide_be_review"] = ide_review
-                    add_log(f"[Backend Dev] IDE review stored — {ph_label}")
-            if IDE_TOOLS_ENABLED and fe_phase.strip():
-                ide_fe_review = await consult_ide_chatbot(
-                    "Frontend Dev",
-                    "UI/UX code review and accessibility suggestions",
-                    f"Review this frontend code for quality, accessibility (WCAG 2.1 AA), and patterns:\n\n{fe_phase[:2000]}",
-                )
-                if ide_fe_review:
-                    ctx["ide_fe_review"] = ide_fe_review
-                    add_log(f"[Frontend Dev] IDE review stored — {ph_label}")
-
-            # Syntax-validate generated Python files immediately
-            syn_errors = await _validate_python_files(be_files)
-            for fp, err in syn_errors:
-                add_log(f"[Backend Dev] ⚠️ Syntax error in {fp}: {err[:120]}")
-            set_agent_status("Frontend Dev", "IDLE", "cyan")
-            set_agent_status("Backend Dev",  "IDLE", "green")
-
-            # Database Engineer
-            set_agent_status("Database Engineer", "MIGRATING...", "gray")
-            add_log(f"[Database Engineer] {ph_label} — schema & migrations...")
-            db_out = await llm_call(
-                "Database Engineer",
-                "Task (phase): " + phase + "\n\nArchitecture:\n" + arch_out,
-            )
-            ctx["database"] = db_out
-            db_files = parse_files_from_llm(db_out)
-            all_files.extend(db_files)
-            _write_files_to_workspace(db_files)
-            add_log(f"[Database Engineer] {len(db_files)} migration(s) — {ph_label}")
-            db_cumulative += "\n" + db_out[:600]  # feed schema to Backend in next phase
-            set_agent_status("Database Engineer", "IDLE", "gray")
-
-        # QA GATE — LangGraph ReAct subgraph (LANGGRAPH_ENABLED=true)
-        #           or legacy retry loop (LANGGRAPH_ENABLED=false, default)
-        _qa_result = await _run_qa_subgraph(
-            task=task, arch_out=arch_out, fe_phase=fe_phase, be_phase=be_phase,
-            all_files=all_files, qa_files=qa_files, ctx=ctx, task_id=task_id,
+        # ── PHASE 3: Database Engineer ────────────────────────────────────────
+        set_agent_status("Database Engineer", "MIGRATING...", "gray")
+        add_log("[Database Engineer] Analysing schema requirements...")
+        mems = await db_recall_memories("Database Engineer", MEMORY_CONTEXT_K)
+        mem = "\n".join(f"- {m}" for m in mems) or "No prior memories."
+        db_raw = await call_llm(
+            "Database Engineer",
+            AGENT_SYSTEM_PROMPTS["Database Engineer"],
+            (
+                f"Task: {task}\n\nArchitecture:\n{architecture_doc}{arch_project_ctx}\n\n"
+                f"Backend summary: {be_result.get('summary', '')}\n\nPast memories:\n{mem}\n\n"
+                "Design the database schema and required migrations."
+            ),
+            temperature=0.25,
         )
-        all_files = _qa_result["all_files"]
-        qa_files  = _qa_result["qa_files"]
-        ctx       = _qa_result["ctx"]
+        db_result = _parse_agent_response(db_raw)
+        for f in db_result.get("files", []):
+            await write_workspace_file(task_id, f["path"], f["content"])
+            all_files.append(f)
+        for note in db_result.get("notes", []):
+            await db_store_memory(task_id, "Database Engineer", "schema", note)
+        add_log(f"[Database Engineer] ✅ {len(db_result.get('files', []))} schema files.")
+        set_agent_status("Database Engineer", "IDLE", "gray")
 
-        # SECURITY GATE — LangGraph ReAct subgraph (LANGGRAPH_ENABLED=true)
-        #                or legacy retry loop (LANGGRAPH_ENABLED=false, default)
-        _sec_result = await _run_security_subgraph(
-            task=task, arch_out=arch_out, fe_phase=fe_phase, be_phase=be_phase,
-            db_cumulative=db_cumulative, all_files=all_files, ctx=ctx, task_id=task_id,
+        # ── PHASE 4: QA Engineer ──────────────────────────────────────────────
+        set_agent_status("QA Engineer", "TESTING...", "yellow")
+        add_log("[QA Engineer] Writing test suites...")
+        mems = await db_recall_memories("QA Engineer", MEMORY_CONTEXT_K)
+        mem = "\n".join(f"- {m}" for m in mems) or "No prior memories."
+        generated_summary = "\n".join(f"- {f['path']}" for f in all_files)
+        qa_raw = await call_llm(
+            "QA Engineer",
+            AGENT_SYSTEM_PROMPTS["QA Engineer"],
+            (
+                f"Task: {task}\n\nGenerated files:\n{generated_summary}{arch_project_ctx}\n\n"
+                f"Backend summary: {be_result.get('summary', '')}\n"
+                f"Frontend summary: {fe_result.get('summary', '')}\n\nPast memories:\n{mem}\n\n"
+                "Write comprehensive tests for all generated code."
+            ),
+            temperature=0.3,
         )
-        all_files   = _sec_result["all_files"]
-        ctx         = _sec_result["ctx"]
-        scan_passed = _sec_result["scan_passed"]
+        qa_result = _parse_agent_response(qa_raw)
+        for f in qa_result.get("files", []):
+            await write_workspace_file(task_id, f["path"], f["content"])
+            all_files.append(f)
+        for note in qa_result.get("notes", []):
+            await db_store_memory(task_id, "QA Engineer", "test_pattern", note)
+        py_passed, py_out, tests_passed = await run_pytest(GIT_WORKSPACE)
+        if ENABLE_REAL_TOOLS:
+            add_log(f"[QA Engineer] pytest: {'✅ PASS' if py_passed else '❌ FAIL'} — {tests_passed} tests")
+            if py_out.strip():
+                add_log(f"[QA Engineer] {py_out[:300]}")
+        else:
+            add_log(f"[QA Engineer] ✅ {len(qa_result.get('files', []))} test files written.")
+        set_agent_status("QA Engineer", "IDLE", "yellow")
 
-        # DEVOPS — CI/CD + optional Docker build
+        # ── PHASE 5: Security Analyst ─────────────────────────────────────────
+        set_agent_status("Security Analyst", "SCANNING...", "red")
+        add_log("[Security Analyst] Running OWASP/ASVS code review...")
+        mems = await db_recall_memories("Security Analyst", MEMORY_CONTEXT_K)
+        mem = "\n".join(f"- {m}" for m in mems) or "No prior findings."
+        sec_raw = await call_llm(
+            "Security Analyst",
+            AGENT_SYSTEM_PROMPTS["Security Analyst"],
+            (
+                f"Task: {task}\n\nGenerated files:\n{generated_summary}\n\n"
+                f"Architecture: {architecture_doc}{arch_project_ctx}\n\nPast security findings:\n{mem}\n\n"
+                f"Review all generated code for OWASP Top 10 and CWE Top 25 vulnerabilities."
+            ),
+            temperature=0.2,
+        )
+        sec_result = _parse_agent_response(sec_raw)
+        for f in sec_result.get("files", []):
+            await write_workspace_file(task_id, f["path"], f["content"])
+            all_files.append(f)
+        for note in sec_result.get("notes", []):
+            await db_store_memory(task_id, "Security Analyst", "security_finding", note)
+        bandit_clean, bandit_out = await run_bandit(GIT_WORKSPACE)
+        if ENABLE_REAL_TOOLS:
+            add_log(f"[Security Analyst] bandit: {'✅ CLEAN' if bandit_clean else '⚠️ FINDINGS'}")
+            if not bandit_clean:
+                add_log(f"[Security Analyst] {bandit_out[:300]}")
+        add_log(f"[Security Analyst] ✅ {len(sec_result.get('files', []))} security docs written.")
+        set_agent_status("Security Analyst", "IDLE", "red")
+
+        # ── PHASE 6: DevOps Engineer ──────────────────────────────────────────
         set_agent_status("DevOps Engineer", "DEPLOYING...", "orange")
-        add_log("[DevOps Engineer] Generating CI/CD configuration...")
-        devops_out   = await llm_call(
+        add_log("[DevOps Engineer] Writing Dockerfile + CI/CD pipeline...")
+        mems = await db_recall_memories("DevOps Engineer", MEMORY_CONTEXT_K)
+        mem = "\n".join(f"- {m}" for m in mems) or "No prior memories."
+        dv_raw = await call_llm(
             "DevOps Engineer",
-            "Task: " + task + "\n\nGenerated files: " + str([f["path"] for f in all_files[:25]]),
+            AGENT_SYSTEM_PROMPTS["DevOps Engineer"],
+            (
+                f"Task: {task}\n\nGenerated files:\n{generated_summary}{arch_project_ctx}\n\nPast experience:\n{mem}\n\n"
+                "Create Dockerfile, GitHub Actions CI/CD workflow, and K8s manifests."
+            ),
+            temperature=0.35,
         )
-        devops_files = parse_files_from_llm(devops_out)
-        all_files.extend(devops_files)
-        _write_files_to_workspace(devops_files)
-        add_log(f"[DevOps Engineer] {len(devops_files)} CI/CD file(s) generated.")
-
-        if DOCKER_BUILD and (GIT_WORKSPACE / "Dockerfile").exists():
-            build_ok, build_log = await docker_build(GIT_WORKSPACE, task_id)
-            add_log(f"[DevOps Engineer] Docker build: {'OK' if build_ok else 'FAILED'} — {build_log[-120:]}")
-
+        dv_result = _parse_agent_response(dv_raw)
+        for f in dv_result.get("files", []):
+            await write_workspace_file(task_id, f["path"], f["content"])
+            all_files.append(f)
+        for note in dv_result.get("notes", []):
+            await db_store_memory(task_id, "DevOps Engineer", "infra_pattern", note)
+        add_log(f"[DevOps Engineer] ✅ {len(dv_result.get('files', []))} infra files written.")
         set_agent_status("DevOps Engineer", "IDLE", "orange")
 
-        # GIT — commit all files + open GitHub PR
-        pr_url: str | None = None
-        branch = f"feat/{task_id}"
-        if all_files:
-            pr_url, branch = await git_commit_and_push(task_id, task, all_files)
-            await db_save_files(task_id, all_files)
+        # ── ARCHITECTURE DOC UPDATE (before git commit) ───────────────────────
+        add_log("[PM] Updating living project architecture document...")
+        arch_update = await call_llm(
+            "Project Manager",
+            (
+                "You are a senior technical writer maintaining a living architecture document for a software project. "
+                "Output ONLY a clean Markdown document — no JSON, no code fences wrapping the whole document, "
+                "no commentary. Preserve all existing sections and content. Add or update sections as needed."
+            ),
+            (
+                f"Existing project architecture:\n{project_arch or '(none — create a new document)'}\n\n"
+                f"Completed task: {task}\n\n"
+                f"Architect design summary:\n{architecture_doc}\n\n"
+                f"New files added in this task:\n" + "\n".join(f"- {f['path']}" for f in all_files) + "\n\n"
+                "Update the architecture document to reflect this task's additions. "
+                "Add/update sections for: new API endpoints, data models, React components, "
+                "database schema changes, and any key architectural decisions made."
+            ),
+            temperature=0.3,
+        )
+        await write_workspace_file(task_id, "docs/PROJECT_ARCHITECTURE.md", arch_update)
+        all_files.append({"path": "docs/PROJECT_ARCHITECTURE.md", "content": arch_update})
+        add_log("[PM] ✅ docs/PROJECT_ARCHITECTURE.md updated and queued for commit.")
 
-        # PROJECT MANAGER — delivery report
+        # ── PHASE 7: Git commit + PR ─────────────────────────────────────────
+        all_file_paths = [f["path"] for f in all_files]
+        infra_detected = _detect_infra_files(all_file_paths)
+        add_log(f"[GIT] Committing {len(all_files)} files to branch {branch}...")
+        if infra_detected:
+            add_log(
+                f"[GIT][INFRA GATE] ⚠️  {len(infra_detected)} infrastructure file(s) in this delivery — "
+                "PR will carry mandatory review checklist."
+            )
+        pr_url = await git_commit_push(task_id, branch, all_file_paths)
+        add_log(f"[GIT] ✅ {'PR opened: ' + pr_url if pr_url else 'Committed to ' + branch}")
+
+        # ── PHASE 8: Project Manager — Delivery Report ───────────────────────
         set_agent_status("Project Manager", "REPORTING...", "blue")
         add_log("[Project Manager] Compiling delivery report...")
-        pm_ctx = (
-            "Task: " + task + "\n"
-            "Implementation phases: " + str(len(phase_list)) + "\n"
-            "Files generated: " + str(len(all_files)) + "\n"
-            "Security scan: " + ("PASSED" if scan_passed else "FAILED") + "\n"
-            "PR: " + (pr_url or "local branch — no GitHub configured") + "\n\n"
-            "Architecture:\n" + arch_out[:500] + "\n\n"
-            "Security findings:\n" + ctx.get("security", "")[:400]
+        mems = await db_recall_memories("Project Manager", MEMORY_CONTEXT_K)
+        mem = "\n".join(f"- {m}" for m in mems) or "No prior deliveries."
+        pm_raw = await call_llm(
+            "Project Manager",
+            AGENT_SYSTEM_PROMPTS["Project Manager"],
+            (
+                f"Completed task: {task}\nTask ID: {task_id}\n\n"
+                f"Files generated ({len(all_files)}):\n{generated_summary}\n\n"
+                f"Tests passed: {tests_passed} | Branch: {branch} | PR: {pr_url or 'N/A'}\n"
+                f"Past deliveries:\n{mem}\n\nWrite a concise delivery report."
+            ),
+            temperature=0.3,
         )
-        pm_out = await llm_call("Project Manager", pm_ctx)
-        add_log(f"[Project Manager] {pm_out.splitlines()[0][:120]}")
+        pm_result = _parse_agent_response(pm_raw)
+        for note in pm_result.get("notes", []):
+            await db_store_memory(task_id, "Project Manager", "delivery", note)
 
-        # ── Persist agent memories for future runs ────────────────────────────
-        # Derive simple tech-stack tags for searchable memory recall
-        _task_lower = task.lower()
-        _tags = ",".join(w for w in ["auth", "stripe", "postgres", "redis", "docker", "k8s",
-                                     "react", "nextjs", "fastapi", "celery", "websocket"]
-                         if w in _task_lower or w in arch_out.lower()[:300])
-        await memory_store(task_id, "Architect",        "architecture", arch_out[:1000], tags=_tags)
-        await memory_store(task_id, "Backend Dev",      "patterns",     be_out[:800],   tags=_tags)
-        await memory_store(task_id, "Security Analyst", "findings",     ctx.get("security", "")[:600], tags="security")
-        await memory_store(task_id, "Project Manager",  "delivery",     pm_out[:600],   tags=_tags)
-
-        # ── History entry ─────────────────────────────────────────────────────
-        history_entry: dict[str, Any] = {
-            "id":             task_id,
-            "description":    task,
-            "completed_at":   time.strftime("%Y-%m-%d %H:%M:%S"),
-            "files_modified": len(all_files),
-            "tests_passed":   len(qa_files) * 8,
-            "pr_url":         pr_url,
-            "branch":         branch,
-            "llm_used":       llm_used,
-        }
-        SYSTEM_STATE["history"].append(history_entry)
-        if len(SYSTEM_STATE["history"]) > 50:
-            SYSTEM_STATE["history"] = SYSTEM_STATE["history"][-50:]
-        await db_save_task(history_entry)
-
-        # ── Deliver report ────────────────────────────────────────────────────
-        report_msg = (
-            "## Task Complete — `" + task + "`\n"
-            "**ID:** `" + task_id + "` | **Branch:** `" + branch + "`\n\n"
-            "- " + str(len(phase_list)) + " phase(s) | " + str(len(all_files)) + " file(s) generated\n"
-            "- Security: " + ("PASSED" if scan_passed else "FAILED") + "\n"
-            "- LLM: " + (OPENAI_MODEL if llm_used else "Simulated") + "\n"
-            + (("- PR: " + pr_url) if pr_url else "- Committed locally") + "\n\n"
-            "**Report:**\n" + pm_out[:600]
-        )
-        if _use_discord() and channel:
-            reports_ch = bot.get_channel(CH_REPORTS) if CH_REPORTS else channel
-            await (reports_ch or channel).send(report_msg[:2000])
-
-        if _use_whatsapp():
-            wa_msg = (
-                "Task Complete: " + task + "\n"
-                "Phases: " + str(len(phase_list)) + " | Files: " + str(len(all_files)) + "\n"
-                "LLM: " + (OPENAI_MODEL if llm_used else "Simulated") + "\n"
-                + (("PR: " + pr_url) if pr_url else "Branch: " + branch) + "\n\n"
-                + pm_out[:500]
+        report = (
+            f"## 🚀 Task Complete — `{task}`\n"
+            f"**ID:** `{task_id}` | **Branch:** `{branch}`"
+            + (f" | [PR]({pr_url})" if pr_url else "") + "\n\n"
+            f"- 📂 **{len(all_files)} files** generated\n"
+            f"- ✅ **{tests_passed} tests** passed\n"
+            f"- 🔒 Security: {'✅ CLEAN' if bandit_clean else '⚠️ review required'}\n"
+            f"- 🤖 LLM: {'✅ ' + LLM_MODEL if LLM_ENABLED else '⚠️ simulation mode'}\n"
+            + (
+                f"- ⚠️ **INFRA GATE:** {len(infra_detected)} infra file(s) — "
+                "PR requires dedicated infrastructure review before merge.\n"
+                if infra_detected else
+                "- 🟢 No infrastructure files — standard code review applies.\n"
             )
-            await wa_send(MANAGER_WHATSAPP, wa_msg)
+            + "\n" + pm_result.get("summary", "")
+        )
+
+        task_record: dict[str, Any] = {
+            "id": task_id,
+            "description": task,
+            "completed_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "files_modified": len(all_files),
+            "tests_passed": tests_passed,
+            "branch": branch,
+            "pr_url": pr_url,
+            "llm_used": int(LLM_ENABLED),
+        }
+        await db_save_task(task_record)
+        SYSTEM_STATE["history"].insert(0, task_record)
+        if len(SYSTEM_STATE["history"]) > 50:
+            SYSTEM_STATE["history"] = SYSTEM_STATE["history"][:50]
+
+        reports_ch = bot.get_channel(CH_REPORTS) if CH_REPORTS else channel
+        await (reports_ch or channel).send(report)
 
     except Exception as exc:
         add_log(f"[ERROR] Pipeline failed: {exc}")
-        if channel and _use_discord():
-            try:
-                await channel.send(f"Pipeline error: `{exc}`")
-            except Exception:
-                pass
-        if _use_whatsapp():
-            await wa_send(MANAGER_WHATSAPP, f"Pipeline failed: {exc}")
+        try:
+            await channel.send(f"❌ **Pipeline error:** `{exc}`")
+        except Exception:
+            pass
 
     finally:
         for name in SYSTEM_STATE["agents"]:
             SYSTEM_STATE["agents"][name]["status"] = "IDLE"
         SYSTEM_STATE["current_task"] = "None"
         asyncio.create_task(_broadcast())
-        add_log("[Project Manager] Workflow complete. Team standing by.")
+        add_log("[Project Manager] ✅ Workflow complete. Team standing by.")
 
 
 # ============================================================
-# 10. FASTAPI APP
+# 9. FASTAPI APP
 # ============================================================
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # type: ignore[type-arg]
+    # ── DB init ─────────────────────────────────────────────
     await init_db()
-    history = await db_load_history()
-    SYSTEM_STATE["history"] = history
-    recent_logs = await db_load_recent_logs(100)
-    SYSTEM_STATE["logs"] = recent_logs + SYSTEM_STATE["logs"]
-    SYSTEM_STATE["llm_enabled"] = bool(OPENAI_API_KEY)
-    SYSTEM_STATE["git_enabled"] = bool(GITHUB_REPO)
-    add_log(f"[DB] Loaded {len(history)} task(s), {len(recent_logs)} recent log(s).")
-
-    if not _use_discord():
-        add_log("[INFO] Discord bridge disabled -- check MESSAGING_PROVIDER or DISCORD_TOKEN.")
+    SYSTEM_STATE["history"] = await db_load_history()
+    add_log(f"[DB] SQLite initialised at {DB_PATH}")
+    # ── Discord bridge ───────────────────────────────────────
+    if not DISCORD_TOKEN:
+        add_log("[WARN] DISCORD_TOKEN not set — Discord bridge disabled.")
         yield
+        await _db.close() if _db else None  # type: ignore[union-attr]
         return
-
     bot_task = asyncio.create_task(bot.start(DISCORD_TOKEN))
     add_log("[BOOT] Discord bridge starting...")
     yield
@@ -2114,29 +1155,42 @@ async def lifespan(app: FastAPI):  # type: ignore[type-arg]
         await bot_task
     except asyncio.CancelledError:
         pass
+    if _db:
+        await _db.close()
 
 
-app = FastAPI(title="AI Dev Team -- Agent Mesh", version="5.0.0", lifespan=lifespan)
+app = FastAPI(title="CoDevx — Agent Mesh", version="3.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST"],
-    allow_headers=["*"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
+
+# ── WebSocket ─────────────────────────────────────────────────────────────────
 
 @app.websocket("/ws/state")
 async def ws_state(websocket: WebSocket) -> None:
     await websocket.accept()
     _ws_clients.add(websocket)
-    await websocket.send_text(json.dumps({"type": "state_update", "payload": SYSTEM_STATE}))
+    await websocket.send_text(
+        json.dumps({"type": "state_update", "payload": SYSTEM_STATE})
+    )
     try:
         while True:
             await websocket.receive_text()
     except (WebSocketDisconnect, Exception):
         _ws_clients.discard(websocket)
+
+
+# ── REST API ──────────────────────────────────────────────────────────────────
+
+@app.get("/health")
+async def health() -> dict[str, str]:
+    return {"status": "ok", "version": "3.0.0"}
 
 
 @app.get("/api/state")
@@ -2146,7 +1200,6 @@ async def get_state() -> dict[str, Any]:
 
 @app.get("/api/agents/{name}")
 async def get_agent(name: str) -> dict[str, Any]:
-    from fastapi import HTTPException
     agent = SYSTEM_STATE["agents"].get(name)
     if not agent:
         raise HTTPException(status_code=404, detail=f"Agent '{name}' not found.")
@@ -2159,224 +1212,212 @@ async def get_history() -> list[Any]:
 
 
 @app.get("/api/files/{task_id}")
-async def get_task_files(task_id: str) -> list[dict]:
-    """Return all files generated by a specific task (from SQLite)."""
-    try:
-        async with aiosqlite.connect(DB_PATH) as db:
-            db.row_factory = aiosqlite.Row
-            async with db.execute(
-                "SELECT file_path, content FROM generated_files WHERE task_id = ?",
-                (task_id,),
-            ) as cur:
-                rows = await cur.fetchall()
-                return [{"path": r["file_path"], "content": r["content"]} for r in rows]
-    except Exception:
-        return []
+async def get_task_files(task_id: str) -> list[dict[str, Any]]:
+    """Return metadata for all files generated by a specific task."""
+    files = await db_get_files(task_id)
+    if not files:
+        raise HTTPException(status_code=404, detail=f"No files found for task '{task_id}'")
+    # Return path + created_at only (omit content to keep response small)
+    return [{"path": f["file_path"], "created_at": f["created_at"]} for f in files]
 
 
-@app.post("/webhook/whatsapp")
-async def whatsapp_webhook(
-    Body: str = Form(default=""),
-    From: str = Form(default=""),
-) -> Response:
-    """
-    Twilio webhook -- POST here when manager messages the WhatsApp number.
-    Point Twilio sandbox/number to: http://<your-ngrok-url>/webhook/whatsapp
-    Commands:  order <task> | approve | reject
-    """
-    if not _use_whatsapp():
-        return Response(content="", media_type="text/plain")
-
-    body_lower = Body.strip().lower()
-    sender = From.strip()
-
-    if body_lower.startswith("!order ") or body_lower.startswith("order "):
-        task = Body.strip().split(" ", 1)[1].strip()
-        add_log(f"[WhatsApp] Order from {sender}: {task}")
-        asyncio.create_task(_handle_new_order(task))
-
-    elif body_lower == "approve":
-        task = _wa_pending.pop(sender, None)
-        if task:
-            add_log(f"[WhatsApp] Plan approved by {sender}")
-            asyncio.create_task(execute_pipeline(None, task))
-        else:
-            await wa_send(sender, "No pending plan. Send 'order <task>' to start one.")
-
-    elif body_lower == "reject":
-        task = _wa_pending.pop(sender, None)
-        if task:
-            add_log(f"[WhatsApp] Plan rejected by {sender}")
-            set_agent_status("Project Manager", "IDLE", "blue")
-            SYSTEM_STATE["current_task"] = "None"
-            await wa_send(sender, "Plan rejected. Send 'order <task>' to start a new one.")
-        else:
-            await wa_send(sender, "No pending plan to reject.")
-
-    elif body_lower.startswith("approve arch") or body_lower.startswith("reject arch"):
-        # Human-in-the-loop architecture gate (HUMAN_GATE_ENABLED=true)
-        parts_wa  = Body.strip().split()
-        action_wa = parts_wa[0].lower()   # "approve" or "reject"
-        tid_arg   = parts_wa[2] if len(parts_wa) > 2 else _gate_task_map.get("current", "")
-        gate      = _pipeline_gates.get(tid_arg)
-        if gate and not gate.is_set():
-            if action_wa == "approve":
-                gate.set()
-                await wa_send(sender, f"✅ Architecture approved for task {tid_arg}. Coding begins...")
-                add_log(f"[HITL][WhatsApp] Architecture approved by {sender} — task {tid_arg}")
-            else:
-                SYSTEM_STATE[f"_gate_rejected_{tid_arg}"] = True
-                gate.set()
-                await wa_send(sender, f"❌ Architecture rejected for task {tid_arg}. Pipeline aborted.")
-                add_log(f"[HITL][WhatsApp] Architecture rejected by {sender} — task {tid_arg}")
-        else:
-            await wa_send(sender, f"⚠️ No open architecture gate for task '{tid_arg}'.")
-
-    else:
-        await wa_send(
-            sender,
-            "AI Dev Team Commands:\n\n"
-            "order <task>              — start a new pipeline\n"
-            "approve                   — approve the pending plan\n"
-            "reject                    — reject the pending plan\n"
-            "approve arch <task_id>    — approve architecture (HITL gate)\n"
-            "reject arch <task_id>     — reject architecture (HITL gate)",
-        )
-
-    return Response(
-        content="<?xml version='1.0'?><Response></Response>",
-        media_type="text/xml",
-    )
+class _OrderBody(BaseModel):
+    task: str
 
 
+@app.post("/api/order")
+async def submit_order(body: _OrderBody) -> dict[str, str]:
+    """Submit a task order directly from the dashboard UI (no Discord required)."""
+    task = body.task.strip()
+    if not task:
+        raise HTTPException(status_code=400, detail="'task' is required")
+    if SYSTEM_STATE["current_task"] != "None":
+        raise HTTPException(status_code=409, detail="A task is already running. Wait for it to finish.")
+    task_id = str(uuid.uuid4())[:8]
+    add_log(f"[API] Order via REST: '{task}' (id={task_id})")
+    SYSTEM_STATE["current_task"] = task
+    asyncio.create_task(execute_pipeline(_NullChannel(), task))
+    return {"status": "accepted", "task_id": task_id, "task": task}
+
+
+# ── Webhook: ZeroClaw ─────────────────────────────────────────────────────────
+
+def _verify_hmac(secret: str, body: bytes, sig_header: str) -> bool:
+    """Constant-time HMAC-SHA256 verification."""
+    if not secret:
+        return True  # dev mode — no secret configured
+    expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, sig_header.lstrip("sha256="))
 
 
 @app.post("/webhook/zeroclaw")
-async def zeroclaw_webhook(request: Request) -> dict[str, str]:
-    """
-    ZeroClaw SOP webhook endpoint.
-
-    Configure a ZeroClaw SOP in ~/.zeroclaw/workspace/sops/ to POST here when
-    the manager sends a message on any channel. ZeroClaw handles the channel layer
-    (Discord, WhatsApp, Telegram, Slack, Signal …); agent_mesh handles the pipeline.
-
-    Payload (JSON):
-      { "action": "order|approve|reject", "task": "...",
-        "channel": "...", "sender": "...", "reply_url": "..." }
-
-    Security: pass X-ZeroClaw-Signature: sha256=<hmac> and set ZEROCLAW_WEBHOOK_SECRET.
-    """
-    body = await request.body()
-    sig_header = request.headers.get("x-zeroclaw-signature", "")
-    if not _verify_zeroclaw_sig(body, sig_header):
-        raise HTTPException(status_code=401, detail="Invalid X-ZeroClaw-Signature")
-
+async def webhook_zeroclaw(request: Request) -> dict[str, str]:
+    raw_body = await request.body()
+    sig = request.headers.get("X-ZeroClaw-Signature", "")
+    if ZEROCLAW_SECRET and not _verify_hmac(ZEROCLAW_SECRET, raw_body, sig):
+        raise HTTPException(status_code=401, detail="Invalid ZeroClaw signature")
     try:
-        payload = ZeroClawPayload(**json.loads(body))
-    except Exception:
-        raise HTTPException(status_code=422, detail="Invalid JSON payload")
+        data: dict[str, Any] = json.loads(raw_body)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    task = str(data.get("task", "")).strip()
+    if not task:
+        raise HTTPException(status_code=400, detail="'task' field is required")
+    reply_url: str | None = data.get("reply_url")
+    add_log(f"[ZeroClaw] Order received: '{task}'")
+    SYSTEM_STATE["current_task"] = task
 
-    action = payload.action.lower().strip()
-    sender = payload.sender or "zeroclaw"
+    async def _run_and_reply() -> None:
+        await execute_pipeline(_NullChannel(), task)
+        if reply_url:
+            try:
+                import httpx
+                report = [e for e in SYSTEM_STATE["logs"][-30:] if "✅" in e or task[:20] in e]
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    await client.post(reply_url, json={"message": "\n".join(report)})
+            except Exception as exc:
+                add_log(f"[ZeroClaw][WARN] reply callback failed: {exc}")
 
-    if action == "order":
-        if not payload.task:
-            return {"status": "error", "message": "Field 'task' is required for action=order"}
-        task = payload.task.strip()
-        add_log(f"[ZeroClaw] Order from {payload.channel}/{sender}: {task}")
-        _zc_pending[sender] = (task, payload.reply_url)
-        asyncio.create_task(_handle_new_order(task))
-        llm_note = f"LLM: {OPENAI_MODEL}" if OPENAI_API_KEY else "LLM: Simulated (no OPENAI_API_KEY)"
-        plan = (
-            f"AI Dev Team — Pipeline plan for: {task}\n\n"
-            f"8-agent SDLC pipeline:\n"
-            f"  1. Architect — Design\n"
-            f"  2. Frontend Dev + Backend Dev (parallel)\n"
-            f"  3. Database Engineer — Schema\n"
-            f"  4. QA Engineer — Tests (80 % gate)\n"
-            f"  5. Security Analyst — OWASP scan\n"
-            f"  6. DevOps Engineer — Docker & CI/CD\n"
-            f"  7. Project Manager — Delivery report\n\n"
-            f"{llm_note}\n"
-            f"Reply with action=approve to execute or action=reject to cancel."
-        )
-        return {"status": "accepted", "message": plan}
+    asyncio.create_task(_run_and_reply())
+    return {"status": "accepted", "task": task}
 
-    if action == "approve":
-        entry = _zc_pending.pop(sender, None)
-        if not entry:
-            return {"status": "no_pending", "message": "No pending plan for this sender."}
-        task, reply_url = entry
-        add_log(f"[ZeroClaw] Plan approved by {sender}. Starting pipeline...")
-        asyncio.create_task(_execute_and_reply_zeroclaw(task, reply_url))
-        return {"status": "ok", "message": f"Pipeline started for: {task}"}
 
-    if action == "reject":
-        entry = _zc_pending.pop(sender, None)
-        set_agent_status("Project Manager", "IDLE", "blue")
-        if entry:
-            SYSTEM_STATE["current_task"] = "None"
-            add_log(f"[ZeroClaw] Plan rejected by {sender}.")
-        return {"status": "ok", "message": "Plan rejected. Send a new order anytime."}
+# ── Webhook: WhatsApp / Twilio ────────────────────────────────────────────────
 
-    return {
-        "status": "unknown",
-        "message": "action must be one of: order | approve | reject",
-    }
+@app.post("/webhook/whatsapp")
+async def webhook_whatsapp(request: Request) -> dict[str, str]:
+    form = await request.form()
+    sender: str = str(form.get("From", ""))
+    body: str   = str(form.get("Body", "")).strip()
 
+    if MANAGER_WHATSAPP and sender != MANAGER_WHATSAPP:
+        add_log(f"[WHATSAPP][WARN] Rejected message from {sender}")
+        raise HTTPException(status_code=403, detail="Unauthorised sender")
+
+    lower = body.lower()
+
+    if lower.startswith("order "):
+        task = body[6:].strip()
+        if not task:
+            return {"status": "ignored", "reason": "empty task"}
+        add_log(f"[WHATSAPP] Order from {sender}: '{task}'")
+        SYSTEM_STATE["current_task"] = task
+        asyncio.create_task(execute_pipeline(_NullChannel(), task))
+        if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN_:
+            try:
+                from twilio.rest import Client as TwilioClient
+                TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN_).messages.create(
+                    body=f"✅ Order received: {task}\nPipeline started. I'll notify you when done.",
+                    from_=TWILIO_FROM or sender,
+                    to=sender,
+                )
+            except Exception as exc:
+                add_log(f"[TWILIO][WARN] Reply failed: {exc}")
+        return {"status": "accepted", "task": task}
+
+    if lower in {"approve", "yes", "✅"}:
+        add_log(f"[WHATSAPP] Approval received from {sender}")
+        return {"status": "approval_noted"}
+
+    if lower in {"reject", "no", "❌"}:
+        add_log(f"[WHATSAPP] Rejection from {sender}")
+        SYSTEM_STATE["current_task"] = "None"
+        for name in SYSTEM_STATE["agents"]:
+            SYSTEM_STATE["agents"][name]["status"] = "IDLE"
+        asyncio.create_task(_broadcast())
+        return {"status": "rejected"}
+
+    return {"status": "ignored", "reason": "unknown command"}
 
 
 # ============================================================
-# 10.5  MCP SERVER  (VS Code Copilot / Cursor / Antigravity)
+# 10.  MCP SERVER  (VS Code Copilot · Cursor · Antigravity)
 # ============================================================
 
-_MCP_TOOLS: list[dict] = [
+_MCP_TOOLS: list[dict[str, Any]] = [
     {
         "name": "codevx_submit_order",
-        "description": "Submit a task to the CoDevx 8-agent SDLC pipeline.",
+        "description": "Submit a development task to the CoDevx 8-agent SDLC pipeline.",
         "inputSchema": {
             "type": "object",
-            "properties": {"task": {"type": "string", "description": "Feature to build"}},
+            "properties": {
+                "task": {
+                    "type": "string",
+                    "description": "Description of the feature or task to build",
+                }
+            },
             "required": ["task"],
         },
     },
-    {"name": "codevx_get_state", "description": "Get all agent statuses.", "inputSchema": {"type": "object", "properties": {}}},
-    {"name": "codevx_get_history", "description": "List completed tasks.", "inputSchema": {"type": "object", "properties": {}}},
+    {
+        "name": "codevx_get_state",
+        "description": "Get current status of all 8 agents and the active task.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "codevx_get_history",
+        "description": "List completed tasks with id, description, timestamp.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
     {
         "name": "codevx_get_logs",
-        "description": "Get recent pipeline logs.",
-        "inputSchema": {"type": "object", "properties": {"limit": {"type": "integer", "default": 50}}},
+        "description": "Get recent pipeline activity logs.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "description": "Number of recent log entries to return (default 50)",
+                    "default": 50,
+                }
+            },
+        },
     },
     {
         "name": "codevx_get_agent",
         "description": "Get status of a specific agent by name.",
-        "inputSchema": {"type": "object", "properties": {"name": {"type": "string", "enum": ["Project Manager", "Architect", "Frontend Dev", "Backend Dev", "QA Engineer", "DevOps Engineer", "Security Analyst", "Database Engineer"]}}, "required": ["name"]},
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Agent name",
+                    "enum": [
+                        "Project Manager", "Architect", "Frontend Dev", "Backend Dev",
+                        "QA Engineer", "DevOps Engineer", "Security Analyst", "Database Engineer",
+                    ],
+                }
+            },
+            "required": ["name"],
+        },
     },
 ]
 
-_MCP_SERVER_INFO: dict = {
+_MCP_SERVER_INFO: dict[str, Any] = {
     "protocolVersion": "2024-11-05",
-    "serverInfo": {"name": "codevx", "version": "5.0.0"},
+    "serverInfo": {"name": "codevx", "version": "3.0.0"},
     "capabilities": {"tools": {}},
 }
 
 
 @app.get("/mcp")
-async def mcp_capabilities() -> dict:
+async def mcp_capabilities() -> dict[str, Any]:
+    """MCP discovery — read by VS Code Copilot, Cursor AI, and Antigravity."""
     return _MCP_SERVER_INFO
 
 
-@app.post("/mcp")
-async def mcp_dispatch(request: Request) -> dict:  # noqa: C901
-    body: dict = await request.json()
+@app.post("/mcp")  # noqa: C901
+async def mcp_dispatch(request: Request) -> dict[str, Any]:
+    """JSON-RPC 2.0 MCP endpoint — handles tool calls from IDE AI agents."""
+    body: dict[str, Any] = await request.json()
     rpc_id = body.get("id")
     method: str = body.get("method", "")
-    params: dict = body.get("params") or {}
+    params: dict[str, Any] = body.get("params") or {}
 
-    def _ok(result: object) -> dict:
+    def _ok(result: Any) -> dict[str, Any]:
         return {"jsonrpc": "2.0", "id": rpc_id, "result": result}
 
-    def _err(code: int, msg: str) -> dict:
+    def _err(code: int, msg: str) -> dict[str, Any]:
         return {"jsonrpc": "2.0", "id": rpc_id, "error": {"code": code, "message": msg}}
 
     try:
@@ -2388,17 +1429,22 @@ async def mcp_dispatch(request: Request) -> dict:  # noqa: C901
 
         if method == "tools/call":
             tool: str = params.get("name", "")
-            args: dict = params.get("arguments") or {}
+            args: dict[str, Any] = params.get("arguments") or {}
 
             if tool == "codevx_submit_order":
                 task = str(args.get("task", "")).strip()
                 if not task:
-                    return _err(-32602, "task argument is required")
-                import uuid as _u; tid = str(_u.uuid4())[:8]
-                add_log(f"[MCP] Order via IDE task_id={tid}")
+                    return _err(-32602, "'task' argument is required")
+                if SYSTEM_STATE["current_task"] != "None":
+                    return _err(-32602, "Pipeline busy — a task is already running")
+                task_id = str(uuid.uuid4())[:8]
+                add_log(f"[MCP] Order via IDE: '{task}' (id={task_id})")
                 SYSTEM_STATE["current_task"] = task
-                asyncio.create_task(execute_pipeline(None, task))
-                return _ok({"content": [{"type": "text", "text": f"Order submitted tid={tid} -- Pipeline started"}]})
+                asyncio.create_task(execute_pipeline(_NullChannel(), task))
+                return _ok({"content": [{"type": "text", "text": (
+                    f"\u2705 Order submitted — task_id `{task_id}`.\n"
+                    "Pipeline started. Check status with `codevx_get_state` or visit http://localhost:8000"
+                )}]})
 
             if tool == "codevx_get_state":
                 return _ok({"content": [{"type": "text", "text": json.dumps(SYSTEM_STATE, indent=2)}]})
@@ -2407,26 +1453,28 @@ async def mcp_dispatch(request: Request) -> dict:  # noqa: C901
                 return _ok({"content": [{"type": "text", "text": json.dumps(SYSTEM_STATE["history"], indent=2)}]})
 
             if tool == "codevx_get_logs":
-                lim = max(1, min(int(args.get("limit", 50)), 200))
-                return _ok({"content": [{"type": "text", "text": chr(10).join(SYSTEM_STATE["logs"][-lim:])}]})
+                limit = max(1, min(int(args.get("limit", 50)), 200))
+                logs = SYSTEM_STATE["logs"][-limit:]
+                return _ok({"content": [{"type": "text", "text": "\n".join(logs)}]})
 
             if tool == "codevx_get_agent":
-                nm = str(args.get("name", ""))
-                ag = SYSTEM_STATE["agents"].get(nm)
-                if not ag:
-                    return _err(-32602, f"Agent not found: {nm}")
-                return _ok({"content": [{"type": "text", "text": json.dumps({"name": nm, **ag}, indent=2)}]})
+                name = str(args.get("name", ""))
+                agent = SYSTEM_STATE["agents"].get(name)
+                if not agent:
+                    return _err(-32602, f"Agent '{name}' not found")
+                return _ok({"content": [{"type": "text", "text": json.dumps({"name": name, **agent}, indent=2)}]})
 
-            return _err(-32601, f"Unknown tool: {tool}")
+            return _err(-32601, f"Unknown tool: '{tool}'")
 
         if method == "ping":
-            return _ok({})
+            return _ok({})  # keep-alive
 
-        return _err(-32601, f"Unknown method: {method}")
+        return _err(-32601, f"Unknown method: '{method}'")
 
     except Exception as exc:
         add_log(f"[MCP][ERROR] {exc}")
         return _err(-32603, "Internal MCP server error")
+
 
 @app.get("/", response_class=HTMLResponse)
 async def serve_fallback() -> HTMLResponse:
@@ -2436,7 +1484,8 @@ async def serve_fallback() -> HTMLResponse:
     except FileNotFoundError:
         return HTMLResponse(
             "<h1 style='font-family:sans-serif;color:#94a3b8'>"
-            "Agent Mesh v3.0 -- open React Command Center at :3000 or :5173.</h1>"
+            "CoDevx Agent Mesh v3.0 running.<br>"
+            "Open the React Command Center at :3000 (Docker) or :5173 (Vite dev).</h1>"
         )
 
 
@@ -2447,25 +1496,19 @@ async def serve_fallback() -> HTMLResponse:
 if __name__ == "__main__":
     print()
     print("=" * 60)
-    print("  AI DEV TEAM -- AGENT MESH v4.0")
+    print("  🤖  CODEVX — AGENT MESH v3.0")
     print("=" * 60)
-    print(f"  Messaging:  {MESSAGING_PROVIDER.upper()}")
-    print(f"  Real tools: {'ON (pytest/bandit/npm-audit)' if ENABLE_REAL_TOOLS else 'OFF'}")
-    print(f"  Retries:    {MAX_RETRIES} (QA + Security gates)")
-    print(f"  Max tokens: {OPENAI_MAX_TOKENS} per agent call")
-    print(f"  Docker:     {'Build enabled' if DOCKER_BUILD else 'Disabled'}")
-    print(f"  LLM:        {OPENAI_MODEL if OPENAI_API_KEY else 'Simulated (no OPENAI_API_KEY)'}")
-    print(f"  Storage:    SQLite -> {DB_PATH}")
-    print(f"  Workspace:  {GIT_WORKSPACE}")
-    print(f"  GitHub:     {GITHUB_REPO if GITHUB_REPO else 'Not configured (local commits only)'}")
-    print("  REST API:   http://localhost:8000/api/state")
-    print("  WebSocket:  ws://localhost:8000/ws/state")
-    print("  React UI:   http://localhost:3000  (Docker)")
-    print("  Dev UI:     http://localhost:5173  (Vite)")
-    print("  WA Webhook: POST http://localhost:8000/webhook/whatsapp")
-    print("  ZC Webhook: POST http://localhost:8000/webhook/zeroclaw")
-    print("  MCP Server: http://localhost:8000/mcp")
-    print("  API Docs:   http://localhost:8000/docs")
+    print(f"  🧠  LLM:        {'✅ ' + LLM_MODEL if LLM_ENABLED else '⚠️  Simulation (set OPENAI_API_KEY)'}")
+    print(f"  💾  DB:         {DB_PATH}")
+    print(f"  📁  Workspace:  {GIT_WORKSPACE}")
+    print(f"  🔧  Tools:      {'✅ pytest + bandit' if ENABLE_REAL_TOOLS else '⚠️  Simulated'}")
+    print("  🌐  REST API:   http://localhost:8000/api/state")
+    print("  📬  Order:      POST http://localhost:8000/api/order")
+    print("  ⚡  WebSocket:  ws://localhost:8000/ws/state")
+    print("  🤝  MCP Server: http://localhost:8000/mcp")
+    print("  📱  React UI:   http://localhost:3000  (Docker)")
+    print("  🔧  Dev UI:     http://localhost:5173  (Vite dev)")
+    print("  📖  API Docs:   http://localhost:8000/docs")
     print("=" * 60)
     print()
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="warning")
