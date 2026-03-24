@@ -7,6 +7,7 @@ import { AgentsPage } from '@/pages/AgentsPage'
 import { LogsPage } from '@/pages/LogsPage'
 import { HistoryPage } from '@/pages/HistoryPage'
 import { SettingsPage } from '@/pages/SettingsPage'
+import { AgentDetailPage } from '@/pages/AgentDetailPage'
 import { useAgentState } from '@/hooks/useAgentState'
 
 // Phosphor Icons web font — loaded via CDN in index.html so icon classes work globally
@@ -30,7 +31,8 @@ export default function App() {
               <Route path="/agents"  element={<AgentsPage state={state} />} />
               <Route path="/logs"    element={<LogsPage   state={state} />} />
               <Route path="/history" element={<HistoryPage state={state} />} />
-              <Route path="/settings" element={<SettingsPage state={state} />} />
+              <Route path="/settings"      element={<SettingsPage    state={state} />} />
+              <Route path="/agents/:name" element={<AgentDetailPage state={state} />} />
             </Routes>
           </main>
         </div>

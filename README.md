@@ -761,6 +761,34 @@ LLM review → bandit + npm audit → SCAN: FAILED?
     → NO:  Pass gate (or hard abort if all retries exhausted)
 ```
 
+### Infrastructure Review Gate
+
+When the DevOps agent generates files that match infrastructure patterns (Dockerfiles, CI/CD workflows, Kubernetes manifests, Terraform configs, Helm charts, Ansible playbooks, etc.), the GitHub PR is automatically flagged:
+
+- The PR body includes a mandatory **INFRA REVIEW REQUIRED** checklist that must be completed before merging
+- A red `infra-review` label is applied to the PR
+- The PR body separates generated files into **Application files** and **Infrastructure files** sections
+- The delivery report notes the infra gate status
+
+```
+Files detected as infrastructure:
+  Dockerfile, docker-compose.yml, k8s/*.yaml, .github/workflows/*.yml,
+  *.tf, *.tfvars, Chart.yaml, values.yaml, *.playbook.yml, Makefile
+
+→ PR created with infra-review label + mandatory human checklist:
+  [ ] Reviewed all infrastructure files
+  [ ] No hardcoded secrets or credentials
+  [ ] Resource limits and health checks are appropriate
+  [ ] Network policies and security groups are locked down
+  [ ] Rollback procedure is understood
+```
+
+DevOps-generated CI/CD workflows follow these safety rules by default:
+- No auto-deploy on push — use `workflow_dispatch` for deployments
+- All deploy jobs require an `environment:` block (GitHub environment protection rules)
+- CI (`ci.yml`) and deploy (`deploy.yml`) are always separate files
+- Every generated file includes a `# CONFIGURE BEFORE USE` header listing required secrets
+
 ---
 
 ## Command Center UI
@@ -775,8 +803,8 @@ The React PWA provides a real-time dashboard for monitoring the pipeline.
 **Pages:**
 | Page | Description |
 |------|-------------|
-| Dashboard | Active task, 8-agent status grid, live terminal logs |
-| Agents | Per-agent detailed view with status badges |
+| Dashboard | Submit orders via the built-in form, monitor the active task, 8-agent status grid, live terminal logs |
+| Agents | Per-agent status overview; click any agent card to open `/agents/:name` with logs filtered to that agent |
 | Logs | Full terminal log with text search |
 | History | Completed tasks: files generated, PR URL, branch, test pass count |
 | Settings | Configuration overview, messaging status, pipeline engine settings |
@@ -822,7 +850,7 @@ AI-DEV-TEAM/
 │       ├── App.tsx
 │       ├── main.tsx
 │       ├── components/        # AgentCard, AgentGrid, Header, Sidebar, …
-│       ├── pages/             # Dashboard, AgentsPage, LogsPage, …
+│       ├── pages/             # Dashboard, AgentsPage, AgentDetailPage, LogsPage, …
 │       ├── hooks/
 │       │   └── useAgentState.ts   # WebSocket + state management
 │       ├── types/index.ts         # Shared TypeScript types
