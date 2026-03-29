@@ -3,7 +3,7 @@
 # ============================================================
 
 team_name: "Struktur AI Builders"
-version: "4.0"
+version: "5.0"
 docs: "README.md"
 
 # ── Messaging / Channel Layer ─────────────────────────────────────────────────
@@ -87,6 +87,26 @@ orchestrator:
   approval_required: true
   approval_timeout_minutes: 30
 
+  # ── AgentScope topology ────────────────────────────────────────────────────
+  agentscope:
+    enabled: true              # set AGENTSCOPE_ENABLED=false to disable
+    topology: "msghub"         # phase 2: ArchitectAgent ↔ FrontendDevAgent ↔ BackendDevAgent
+    memory_backend: "ListMemory + SQLite"
+    agent_class: "DialogAgent" # QA/Security/DevOps use ReActAgent when available
+    hub_config:
+      participants: ["Architect", "Frontend Dev", "Backend Dev"]
+      rounds: 2                # override with MSGHUB_ROUNDS env var
+      broadcast_on_entry: true # architecture doc broadcast to all hub members
+    self_correcting_loops:
+      qa:
+        trigger: "pytest FAILED"
+        max_retries: 2         # override with MAX_RETRIES env var
+        agents_notified: ["Backend Dev", "Frontend Dev"]
+      security:
+        trigger: "bandit HIGH/CRITICAL or npm audit HIGH+"
+        max_retries: 2
+        agents_notified: ["Backend Dev"]
+
 llm:
   provider: "openai"          # set OPENAI_API_KEY to enable
   model: "gpt-4o"             # override with OPENAI_MODEL
@@ -118,11 +138,41 @@ tool_execution:
   docker_build: false         # override with DOCKER_BUILD=true|false
   retry_attempts: 2           # override with MAX_RETRIES
 
+tool_services:
+  # AgentScope ServiceToolkit registrations (agentscope_tools.py)
+  # These functions are available as LLM-callable tools for tool-using agents.
+  - name: "run_pytest_service"
+    agent: "QA Engineer"
+    wraps: "run_pytest()"
+    returns: "ServiceResponse(status, {passed, output, test_count})"
+  - name: "run_bandit_service"
+    agent: "Security Analyst"
+    wraps: "run_bandit()"
+    returns: "ServiceResponse(status, {clean, output})"
+  - name: "run_npm_audit_service"
+    agent: "Security Analyst"
+    wraps: "run_npm_audit()"
+    returns: "ServiceResponse(status, {clean, output})"
+  - name: "git_commit_push_service"
+    agent: "DevOps Engineer"
+    wraps: "git_commit_push()"
+    returns: "ServiceResponse(status, {pr_url, branch, task_id})"
+  - name: "write_file_service"
+    agent: "all"
+    wraps: "write_workspace_file()"
+    returns: "ServiceResponse(status, {path, task_id})"
+  - name: "read_architecture_service"
+    agent: "all"
+    wraps: "_read_project_architecture()"
+    returns: "ServiceResponse(status, {architecture})"
+
 memory:
   enabled: true
-  backend: "sqlite"           # same DB as storage.path
+  backend: "sqlite"           # same DB as storage.path (cross-session persistence)
+  in_context: "ListMemory"    # AgentScope ListMemory per agent (in-context, ephemeral)
   inject_k: 5                 # past memories per task (override: MEMORY_CONTEXT_K)
-  search_mode: "keyword"      # keyword search over agent_memory.content column
+  search_mode: "keyword"      # keyword search over agent_memory.content column (SQLite)
+                              # + ListMemory automatic in-context injection (AgentScope)
   retention: "unlimited"      # agent memories persist across all task runs
 
 pipeline:
@@ -130,11 +180,12 @@ pipeline:
   phases:
     - architect               # 1x: full system design + memory recall
     - decompose               # split task into N phases via LLM
-    - frontend_dev            # parallel with backend_dev
-    - backend_dev             # parallel with frontend_dev
+    - msghub_collaboration    # [NEW v5.0] FE ↔ BE ↔ Architect dynamic hub
+    - frontend_dev            # inside MsgHub (MSGHUB_ROUNDS rounds)
+    - backend_dev             # inside MsgHub (parallel with frontend_dev)
     - database_engineer       # per phase
-    - qa_engineer             # with real test execution + retry loop
-    - security_analyst        # with real bandit/npm-audit + fix loop
+    - qa_engineer             # with self-correcting pytest loop (ReActAgent)
+    - security_analyst        # with self-correcting bandit/npm-audit loop
     - devops_engineer         # CI/CD + optional docker build
     - git_commit_push         # feat/xxxx branch + GitHub PR
     - project_manager         # delivery report + memory store

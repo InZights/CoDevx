@@ -17,3 +17,9 @@ httpx==0.28.1
 # Ollama, Bedrock, Together AI, etc.) with a single unified interface.
 litellm>=1.40.0
 langgraph>=0.2.0
+
+# --- AgentScope integration ---
+# AgentScope provides MsgHub collaboration, ListMemory, ReActAgent tool loops,
+# and ServiceToolkit for pytest/bandit/git as LLM-callable services.
+# Install separately if not present: pip install agentscope>=0.0.6
+agentscope>=0.0.6
