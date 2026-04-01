@@ -1,0 +1,75 @@
+# ============================================================
+# AgentScope Model Configuration — CoDevx v4.0
+# ============================================================
+# Reference configuration for agentscope_init.py.
+# Model configs are built dynamically from env vars at startup.
+# Copy and customize this file for multi-model deployments.
+#
+# Usage:
+#   1. Copy to config/agentscope_model_config_local.yaml
+#   2. Set AGENTSCOPE_MODEL_CONFIG_PATH=config/agentscope_model_config_local.yaml
+#   3. Restart CoDevx
+#
+# Dynamic env-var approach (default):
+#   agentscope_init.py builds configs from OPENAI_API_KEY / ANTHROPIC_API_KEY /
+#   OLLAMA_BASE_URL automatically — no YAML file needed for standard setups.
+
+model_configs:
+
+  # ── OpenAI GPT-4o (default) ─────────────────────────────────────────────────
+  - config_name: "codevx-primary"
+    model_type: "openai_chat"
+    model_name: "gpt-4o"
+    api_key: "${OPENAI_API_KEY}"
+    max_tokens: 4000
+    temperature: 0.4
+    stream: false
+    # Uncomment for Azure OpenAI or LM Studio:
+    # client_args:
+    #   base_url: "${OPENAI_BASE_URL}"
+
+  # ── OpenAI GPT-4.1 (higher reasoning) ───────────────────────────────────────
+  - config_name: "codevx-gpt41"
+    model_type: "openai_chat"
+    model_name: "gpt-4.1"
+    api_key: "${OPENAI_API_KEY}"
+    max_tokens: 4000
+    temperature: 0.4
+    stream: false
+
+  # ── Anthropic Claude 3.5 Sonnet ─────────────────────────────────────────────
+  - config_name: "codevx-claude"
+    model_type: "anthropic_chat"
+    model_name: "claude-3-5-sonnet-20241022"
+    api_key: "${ANTHROPIC_API_KEY}"
+    max_tokens: 4000
+    temperature: 0.4
+
+  # ── Ollama (local, no API key required) ─────────────────────────────────────
+  - config_name: "codevx-ollama"
+    model_type: "ollama_chat"
+    model_name: "llama3.1:70b"
+    host: "${OLLAMA_BASE_URL}"
+    options:
+      temperature: 0.4
+      num_predict: 4000
+
+  # ── Groq (fast inference) ───────────────────────────────────────────────────
+  # Note: Use LiteLLM in agent_mesh.py for Groq — AgentScope does not have a
+  # native Groq model type. Set LLM_MODEL=groq/llama-3.3-70b and use litellm
+  # routing instead.
+
+# ── Agent-specific overrides ────────────────────────────────────────────────────
+# Each agent in agentscope_agents.py uses 'codevx-primary' by default.
+# To assign a different model to a specific agent, modify build_agents() in
+# agentscope_agents.py and pass the desired config_name.
+#
+# Recommended per-agent temperatures (already baked into agent constructors):
+#   Project Manager:   0.3  (structured, deterministic)
+#   Architect:         0.4  (balanced design decisions)
+#   Frontend Dev:      0.6  (creative UI generation)
+#   Backend Dev:       0.4  (precise API implementation)
+#   Database Engineer: 0.25 (highly precise schema design)
+#   QA Engineer:       0.3  (thorough, systematic testing)
+#   Security Analyst:  0.2  (conservative, strict)
+#   DevOps Engineer:   0.35 (infrastructure precision)

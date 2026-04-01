@@ -1,12 +1,14 @@
 """
-CoDevx — Agent Mesh v3.0
+CoDevx — Agent Mesh v4.0
 ================================
 Autonomous 8-agent AI software development team.
 FastAPI backend with:
-  - LiteLLM-powered agent pipeline (100+ LLM providers)
+  - AgentScope-powered pipeline with MsgHub collaboration + self-correcting loops
+  - LiteLLM-powered fallback pipeline (100+ LLM providers)
   - SQLite persistence (aiosqlite) — logs, tasks, files, memory
+  - AgentScope ListMemory (in-context) + SQLite (cross-session) dual memory
   - Git workspace — auto-branch, commit, GitHub PR
-  - Tool execution — pytest, bandit, npm audit
+  - Tool execution — pytest, bandit, npm audit (via AgentScope ServiceToolkit)
   - Discord bot bridge (4-channel) + WhatsApp/Twilio + ZeroClaw webhooks
   - WebSocket real-time state push  (/ws/state)
   - REST /api/* + POST /api/order  (browser-accessible)
@@ -35,6 +37,22 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 load_dotenv()
+
+# ── AgentScope integration (optional — graceful degradation if not installed) ──
+try:
+    from agentscope_init import init_agentscope, AgentScopeConfig  # type: ignore[import]
+    _AGENTSCOPE_IMPORTABLE = True
+except ImportError:
+    _AGENTSCOPE_IMPORTABLE = False
+
+    class AgentScopeConfig:  # type: ignore[no-redef]
+        enabled = False
+
+try:
+    from agentscope_pipeline import execute_agentscope_pipeline  # type: ignore[import]
+    _AS_PIPELINE_IMPORTABLE = True
+except ImportError:
+    _AS_PIPELINE_IMPORTABLE = False
 
 # ============================================================
 # 1. CONFIGURATION
@@ -65,6 +83,10 @@ MAX_SUBTASKS        = int(os.getenv("MAX_SUBTASKS", "5"))
 MEMORY_CONTEXT_K    = int(os.getenv("MEMORY_CONTEXT_K", "5"))
 ENABLE_REAL_TOOLS   = os.getenv("ENABLE_REAL_TOOLS", "false").lower() == "true"
 DOCKER_BUILD        = os.getenv("DOCKER_BUILD",        "false").lower() == "true"
+
+# ── AgentScope controls ────────────────────────────────────────────────────────
+AGENTSCOPE_ENABLED  = os.getenv("AGENTSCOPE_ENABLED", "true").lower() not in {"false", "0", "no"}
+MSGHUB_ROUNDS       = int(os.getenv("MSGHUB_ROUNDS", "2"))
 
 # ── Storage ────────────────────────────────────────────────────────────────────
 DB_PATH = os.getenv("DB_PATH", "./agent_mesh.db")
@@ -101,13 +123,15 @@ SYSTEM_STATE: dict[str, Any] = {
         "Database Engineer": {"status": "IDLE", "color": "gray"},
     },
     "current_task": "None",
-    "logs": ["[BOOT] CoDevx Agent Mesh v3.0 initializing..."],
+    "logs": ["[BOOT] CoDevx Agent Mesh v4.0 initializing (AgentScope edition)..."],
     "history": [],
     "llm_enabled":        LLM_ENABLED,
     "git_enabled":        bool(GITHUB_TOKEN),
     "real_tools_enabled": ENABLE_REAL_TOOLS,
     "zeroclaw_enabled":   MESSAGING_PROVIDER == "zeroclaw",
     "messaging":          MESSAGING_PROVIDER,
+    "agentscope_enabled": False,   # updated after init_agentscope() runs in lifespan
+    "agentscope_config":  None,    # populated with AgentScopeConfig after init
 }
 
 _ws_clients: set[WebSocket] = set()
@@ -767,7 +791,7 @@ class ApprovalView(discord.ui.View):
             return
         await interaction.response.send_message("✅ **Plan Approved.** Team executing...", ephemeral=False)
         self.stop()
-        asyncio.create_task(execute_pipeline(interaction.channel, self.task))
+        asyncio.create_task(_dispatch_pipeline(interaction.channel, self.task))
 
     @discord.ui.button(label="❌  Reject / Modify", style=discord.ButtonStyle.danger, custom_id="reject")
     async def reject(self, interaction: discord.Interaction, _btn: discord.ui.Button) -> None:
@@ -1140,6 +1164,20 @@ async def lifespan(app: FastAPI):  # type: ignore[type-arg]
     await init_db()
     SYSTEM_STATE["history"] = await db_load_history()
     add_log(f"[DB] SQLite initialised at {DB_PATH}")
+    # ── AgentScope init ──────────────────────────────────────
+    if _AGENTSCOPE_IMPORTABLE and AGENTSCOPE_ENABLED:
+        as_cfg = init_agentscope()
+        if as_cfg and as_cfg.enabled:
+            SYSTEM_STATE["agentscope_enabled"] = True
+            SYSTEM_STATE["agentscope_config"] = as_cfg
+            add_log(
+                f"[AgentScope] ✅ Active — model={as_cfg.model_name} "
+                f"msghub_rounds={as_cfg.msghub_rounds}"
+            )
+        else:
+            add_log("[AgentScope] Disabled or unavailable — using legacy pipeline.")
+    else:
+        add_log("[AgentScope] Not enabled (AGENTSCOPE_ENABLED=false or package missing).")
     # ── Discord bridge ───────────────────────────────────────
     if not DISCORD_TOKEN:
         add_log("[WARN] DISCORD_TOKEN not set — Discord bridge disabled.")
@@ -1159,7 +1197,7 @@ async def lifespan(app: FastAPI):  # type: ignore[type-arg]
         await _db.close()
 
 
-app = FastAPI(title="CoDevx — Agent Mesh", version="3.0.0", lifespan=lifespan)
+app = FastAPI(title="CoDevx — Agent Mesh", version="4.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -1168,6 +1206,32 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["Content-Type", "Authorization"],
 )
+
+
+# ---------------------------------------------------------------------------
+# Pipeline dispatcher — routes to AgentScope pipeline or legacy fallback
+# ---------------------------------------------------------------------------
+
+async def _dispatch_pipeline(channel: Any, task: str) -> None:
+    """
+    Dispatch to execute_agentscope_pipeline() when AgentScope is active,
+    or fall back to the legacy execute_pipeline() otherwise.
+
+    This is the single call site that all 4 entry points use:
+      - POST /api/order
+      - Discord !order (via ApprovalView.approve)
+      - POST /webhook/zeroclaw
+      - POST /webhook/whatsapp
+      - MCP codevx_submit_order
+    """
+    if (
+        SYSTEM_STATE.get("agentscope_enabled")
+        and _AS_PIPELINE_IMPORTABLE
+        and AGENTSCOPE_ENABLED
+    ):
+        await execute_agentscope_pipeline(channel, task)
+    else:
+        await execute_pipeline(channel, task)
 
 
 # ── WebSocket ─────────────────────────────────────────────────────────────────
@@ -1190,7 +1254,7 @@ async def ws_state(websocket: WebSocket) -> None:
 
 @app.get("/health")
 async def health() -> dict[str, str]:
-    return {"status": "ok", "version": "3.0.0"}
+    return {"status": "ok", "version": "4.0.0"}
 
 
 @app.get("/api/state")
@@ -1236,7 +1300,7 @@ async def submit_order(body: _OrderBody) -> dict[str, str]:
     task_id = str(uuid.uuid4())[:8]
     add_log(f"[API] Order via REST: '{task}' (id={task_id})")
     SYSTEM_STATE["current_task"] = task
-    asyncio.create_task(execute_pipeline(_NullChannel(), task))
+    asyncio.create_task(_dispatch_pipeline(_NullChannel(), task))
     return {"status": "accepted", "task_id": task_id, "task": task}
 
 
@@ -1268,7 +1332,7 @@ async def webhook_zeroclaw(request: Request) -> dict[str, str]:
     SYSTEM_STATE["current_task"] = task
 
     async def _run_and_reply() -> None:
-        await execute_pipeline(_NullChannel(), task)
+        await _dispatch_pipeline(_NullChannel(), task)
         if reply_url:
             try:
                 import httpx
@@ -1302,7 +1366,7 @@ async def webhook_whatsapp(request: Request) -> dict[str, str]:
             return {"status": "ignored", "reason": "empty task"}
         add_log(f"[WHATSAPP] Order from {sender}: '{task}'")
         SYSTEM_STATE["current_task"] = task
-        asyncio.create_task(execute_pipeline(_NullChannel(), task))
+        asyncio.create_task(_dispatch_pipeline(_NullChannel(), task))
         if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN_:
             try:
                 from twilio.rest import Client as TwilioClient
@@ -1391,11 +1455,19 @@ _MCP_TOOLS: list[dict[str, Any]] = [
             "required": ["name"],
         },
     },
+    {
+        "name": "codevx_get_agentscope_status",
+        "description": (
+            "Get AgentScope integration status including model config, "
+            "memory backend, and hub topology."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
+    },
 ]
 
 _MCP_SERVER_INFO: dict[str, Any] = {
     "protocolVersion": "2024-11-05",
-    "serverInfo": {"name": "codevx", "version": "3.0.0"},
+    "serverInfo": {"name": "codevx", "version": "4.0.0"},
     "capabilities": {"tools": {}},
 }
 
@@ -1440,7 +1512,7 @@ async def mcp_dispatch(request: Request) -> dict[str, Any]:
                 task_id = str(uuid.uuid4())[:8]
                 add_log(f"[MCP] Order via IDE: '{task}' (id={task_id})")
                 SYSTEM_STATE["current_task"] = task
-                asyncio.create_task(execute_pipeline(_NullChannel(), task))
+                asyncio.create_task(_dispatch_pipeline(_NullChannel(), task))
                 return _ok({"content": [{"type": "text", "text": (
                     f"\u2705 Order submitted — task_id `{task_id}`.\n"
                     "Pipeline started. Check status with `codevx_get_state` or visit http://localhost:8000"
@@ -1463,6 +1535,26 @@ async def mcp_dispatch(request: Request) -> dict[str, Any]:
                 if not agent:
                     return _err(-32602, f"Agent '{name}' not found")
                 return _ok({"content": [{"type": "text", "text": json.dumps({"name": name, **agent}, indent=2)}]})
+
+            if tool == "codevx_get_agentscope_status":
+                as_cfg = SYSTEM_STATE.get("agentscope_config")
+                if as_cfg and hasattr(as_cfg, "enabled"):
+                    status = {
+                        "enabled": as_cfg.enabled,
+                        "model": as_cfg.model_name if as_cfg.enabled else None,
+                        "model_type": as_cfg.model_type if as_cfg.enabled else None,
+                        "model_config_name": as_cfg.model_config_name if as_cfg.enabled else None,
+                        "memory_backend": as_cfg.memory_backend if as_cfg.enabled else None,
+                        "hub_topology": as_cfg.hub_topology if as_cfg.enabled else None,
+                        "msghub_rounds": as_cfg.msghub_rounds if as_cfg.enabled else None,
+                        "extra": as_cfg.extra if as_cfg.enabled else {},
+                    }
+                else:
+                    status = {
+                        "enabled": False,
+                        "reason": "AgentScope not initialized or not installed.",
+                    }
+                return _ok({"content": [{"type": "text", "text": json.dumps(status, indent=2)}]})
 
             return _err(-32601, f"Unknown tool: '{tool}'")
 
@@ -1496,9 +1588,10 @@ async def serve_fallback() -> HTMLResponse:
 if __name__ == "__main__":
     print()
     print("=" * 60)
-    print("  🤖  CODEVX — AGENT MESH v3.0")
+    print("  🤖  CODEVX — AGENT MESH v4.0  (AgentScope Edition)")
     print("=" * 60)
     print(f"  🧠  LLM:        {'✅ ' + LLM_MODEL if LLM_ENABLED else '⚠️  Simulation (set OPENAI_API_KEY)'}")
+    print(f"  🔗  AgentScope: {'✅ enabled (MsgHub + self-correcting loops)' if AGENTSCOPE_ENABLED else '⚠️  disabled (AGENTSCOPE_ENABLED=false)'}")
     print(f"  💾  DB:         {DB_PATH}")
     print(f"  📁  Workspace:  {GIT_WORKSPACE}")
     print(f"  🔧  Tools:      {'✅ pytest + bandit' if ENABLE_REAL_TOOLS else '⚠️  Simulated'}")
